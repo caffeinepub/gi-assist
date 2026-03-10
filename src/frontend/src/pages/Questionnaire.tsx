@@ -1,19 +1,21 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import { Principal as PrincipalClass } from "@dfinity/principal";
 import type { Principal } from "@icp-sdk/core/principal";
 import { useSearch } from "@tanstack/react-router";
 import {
+  AlertCircle,
   ArrowRight,
   CheckCircle2,
+  ChevronRight,
+  Globe,
   Loader2,
   Stethoscope,
   User,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useActor } from "../hooks/useActor";
 import {
   useAnswerQuestion,
@@ -33,9 +35,27 @@ export const DEMO_Q = {
 type Language = "en" | "hi" | "mr";
 
 const LANGUAGES = [
-  { code: "en" as Language, label: "English", native: "English" },
-  { code: "hi" as Language, label: "Hindi", native: "हिंदी" },
-  { code: "mr" as Language, label: "Marathi", native: "मराठी" },
+  {
+    code: "en" as Language,
+    label: "English",
+    native: "English",
+    flag: "🇬🇧",
+    desc: "Proceed in English",
+  },
+  {
+    code: "hi" as Language,
+    label: "Hindi",
+    native: "हिंदी",
+    flag: "🇮🇳",
+    desc: "हिंदी में जारी रखें",
+  },
+  {
+    code: "mr" as Language,
+    label: "Marathi",
+    native: "मराठी",
+    flag: "🇮🇳",
+    desc: "मराठीत पुढे जा",
+  },
 ];
 
 const UI: Record<
@@ -71,7 +91,7 @@ const UI: Record<
   }
 > = {
   en: {
-    title: "GI-ASSIST",
+    title: "GI-CDSS",
     subtitle: "Gastroenterology Symptom Questionnaire",
     selectLang: "Select your language",
     startBtn: "Begin Questionnaire",
@@ -102,7 +122,7 @@ const UI: Record<
     other: "Other",
   },
   hi: {
-    title: "GI-ASSIST",
+    title: "GI-CDSS",
     subtitle: "जठरांत्र लक्षण प्रश्नावली",
     selectLang: "अपनी भाषा चुनें",
     startBtn: "प्रश्नावली शुरू करें",
@@ -132,7 +152,7 @@ const UI: Record<
     other: "अन्य",
   },
   mr: {
-    title: "GI-ASSIST",
+    title: "GI-CDSS",
     subtitle: "जठरांत्र लक्षण प्रश्नावली",
     selectLang: "तुमची भाषा निवडा",
     startBtn: "प्रश्नावली सुरू करा",
@@ -173,6 +193,90 @@ interface Demographics {
   occupation: string;
 }
 
+/* ── Floating particle for complete screen ── */
+function Particle({ delay, x, y }: { delay: number; x: number; y: number }) {
+  return (
+    <motion.div
+      className="absolute w-1.5 h-1.5 rounded-full pointer-events-none"
+      style={{
+        left: `${x}%`,
+        top: `${y}%`,
+        background: `oklch(${0.7 + Math.random() * 0.15} ${0.14 + Math.random() * 0.06} ${170 + Math.random() * 30})`,
+      }}
+      initial={{ opacity: 0, scale: 0, y: 0 }}
+      animate={{
+        opacity: [0, 1, 1, 0],
+        scale: [0, 1, 1, 0],
+        y: [0, -60 - Math.random() * 40],
+      }}
+      transition={{
+        duration: 2.5,
+        delay,
+        repeat: Number.POSITIVE_INFINITY,
+        repeatDelay: 1.5 + Math.random() * 2,
+        ease: "easeOut",
+      }}
+    />
+  );
+}
+
+/* ── Scale color by value ── */
+function scaleColor(val: number): string {
+  if (val <= 3) return "oklch(0.73 0.17 148)"; // green
+  if (val <= 6) return "oklch(0.82 0.15 72)"; // amber
+  return "oklch(0.62 0.22 22)"; // red
+}
+
+function scaleLabel(val: number): string {
+  if (val <= 3) return "Mild";
+  if (val <= 6) return "Moderate";
+  if (val <= 8) return "Severe";
+  return "Very Severe";
+}
+
+/* ── Styled range slider fill via CSS var trick ── */
+function ScaleSlider({
+  value,
+  onChange,
+}: { value: number; onChange: (v: number) => void }) {
+  const pct = ((value - 1) / 9) * 100;
+  const color = scaleColor(value);
+  return (
+    <div className="relative">
+      <input
+        type="range"
+        min={1}
+        max={10}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+        style={{
+          background: `linear-gradient(to right, ${color} ${pct}%, oklch(var(--border)) ${pct}%)`,
+        }}
+      />
+      <div className="flex justify-between mt-1 px-0.5">
+        {Array.from({ length: 10 }, (_, i) => (
+          <button
+            type="button"
+            key={`scale-btn-${i + 1}`}
+            onClick={() => onChange(i + 1)}
+            className="w-5 h-5 text-[10px] font-bold rounded-full transition-all duration-150"
+            style={{
+              background: i + 1 <= value ? color : "oklch(var(--muted))",
+              color:
+                i + 1 <= value
+                  ? "oklch(var(--primary-foreground))"
+                  : "oklch(var(--muted-foreground))",
+            }}
+          >
+            {i + 1}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function QuestionnairePage() {
   const search = useSearch({ strict: false }) as { doctorId?: string };
   const doctorId = search.doctorId;
@@ -198,10 +302,31 @@ export default function QuestionnairePage() {
   const [scaleValue, setScaleValue] = useState<number>(5);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [retryStatus, setRetryStatus] = useState<{
+    attempt: number;
+    total: number;
+  } | null>(null);
+
+  // particles for complete screen
+  const particles = useRef(
+    Array.from({ length: 18 }, (_, i) => ({
+      id: i,
+      delay: i * 0.18,
+      x: 10 + Math.random() * 80,
+      y: 20 + Math.random() * 60,
+    })),
+  );
 
   const ui = UI[language];
   const currentQuestion = QUESTION_MAP.get(currentQuestionId);
   const progressPct = Math.round((answeredIds.length / QUESTIONS.length) * 100);
+  const questionNum = answeredIds.length + 1;
+
+  // Scroll to top on phase/question change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on question navigation
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [phase, answeredIds.length]);
 
   const handleLanguageNext = () => {
     setPhase("demographics");
@@ -242,7 +367,11 @@ export default function QuestionnairePage() {
       const id = await createSession.mutateAsync({
         doctorId: principal,
         language,
+        onRetry: (attempt: number, total: number) => {
+          setRetryStatus({ attempt, total });
+        },
       });
+      setRetryStatus(null);
       setSessionId(id);
 
       await answerQuestion.mutateAsync({
@@ -275,7 +404,19 @@ export default function QuestionnairePage() {
       setAnsweredIds([]);
       setPhase("questions");
     } catch (e) {
-      setDemoError(e instanceof Error ? e.message : ui.errorMsg);
+      setRetryStatus(null);
+      const msg = e instanceof Error ? e.message : "";
+      if (
+        msg.includes("IC0508") ||
+        msg.includes("canister is stopped") ||
+        msg.includes("Canister is stopped")
+      ) {
+        setDemoError(
+          "Server temporarily unavailable. Please try again in a moment.",
+        );
+      } else {
+        setDemoError(e instanceof Error ? e.message : ui.errorMsg);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -321,109 +462,191 @@ export default function QuestionnairePage() {
   if (!doctorId) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-8 text-center">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-8 text-center"
+        >
+          <AlertCircle className="w-10 h-10 text-destructive mx-auto mb-4" />
           <p className="text-lg font-semibold text-destructive">Invalid Link</p>
           <p className="text-muted-foreground mt-2 text-sm">
             This link is missing a doctor ID. Please ask your doctor for a valid
             questionnaire link.
           </p>
-        </div>
+        </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col relative">
-      {/* Background orbs */}
+    <div className="min-h-screen bg-background flex flex-col relative overflow-x-hidden">
+      {/* Ambient orbs */}
       <div
-        className="absolute top-0 left-0 w-96 h-96 rounded-full pointer-events-none opacity-5"
+        className="fixed top-0 left-0 w-[600px] h-[600px] rounded-full pointer-events-none opacity-[0.06]"
         style={{
           background:
-            "radial-gradient(circle, oklch(0.72 0.14 176) 0%, transparent 70%)",
+            "radial-gradient(circle, oklch(0.74 0.17 178) 0%, transparent 65%)",
+          transform: "translate(-30%, -30%)",
         }}
       />
       <div
-        className="absolute bottom-0 right-0 w-64 h-64 rounded-full pointer-events-none opacity-[0.04]"
+        className="fixed bottom-0 right-0 w-[400px] h-[400px] rounded-full pointer-events-none opacity-[0.05]"
         style={{
           background:
-            "radial-gradient(circle, oklch(0.8 0.13 75) 0%, transparent 70%)",
+            "radial-gradient(circle, oklch(0.82 0.15 72) 0%, transparent 65%)",
+          transform: "translate(30%, 30%)",
         }}
       />
 
-      {/* Header */}
-      <header className="relative border-b border-border/40 py-4 px-4 bg-card/50 backdrop-blur-sm">
-        <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
-        <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/25 flex items-center justify-center">
-            <Stethoscope className="w-4 h-4 text-primary" />
+      {/* ── Header ── */}
+      <header className="relative border-b border-border/40 py-3 px-4 bg-card/60 backdrop-blur-md sticky top-0 z-20">
+        <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
+        <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <motion.div
+              whileHover={{ scale: 1.05, rotate: 5 }}
+              className="w-9 h-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shadow-glow-teal/30"
+            >
+              <Stethoscope className="w-4.5 h-4.5 text-primary" />
+            </motion.div>
+            <div>
+              <h1 className="font-display font-extrabold text-lg text-gradient-teal leading-none tracking-tight">
+                {ui.title}
+              </h1>
+              <p className="text-[10px] text-muted-foreground leading-none mt-0.5 tracking-wide uppercase">
+                {ui.subtitle}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-display font-bold text-base text-gradient-teal leading-none">
-              {ui.title}
-            </h1>
-            <p className="text-xs text-muted-foreground">{ui.subtitle}</p>
-          </div>
+
+          {/* Progress badge in header when in questions phase */}
+          {phase === "questions" && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-center gap-2 bg-primary/10 border border-primary/25 rounded-full px-3 py-1"
+            >
+              <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs font-semibold text-primary">
+                Q {questionNum} / {QUESTIONS.length}
+              </span>
+            </motion.div>
+          )}
+
+          {phase === "language" && (
+            <div className="flex items-center gap-1.5 text-muted-foreground/60">
+              <Globe className="w-4 h-4" />
+              <span className="text-xs">Multi-lingual</span>
+            </div>
+          )}
         </div>
       </header>
 
       <main className="flex-1 flex items-center justify-center p-4 py-8">
         <div className="w-full max-w-2xl">
           <AnimatePresence mode="wait">
-            {/* ── Language ── */}
+            {/* ══════════════════════════════
+                LANGUAGE SELECTION
+            ══════════════════════════════ */}
             {phase === "language" && (
               <motion.div
                 key="language"
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 24 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.35 }}
+                exit={{ opacity: 0, y: -24 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               >
-                <div className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden">
-                  <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
-                  <div className="p-8">
-                    <h2 className="text-2xl font-bold text-center mb-2">
-                      {ui.selectLang}
-                    </h2>
-                    <p className="text-muted-foreground text-sm text-center mb-8">
-                      Choose your preferred language to continue
-                    </p>
+                {/* Hero intro */}
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className="text-center mb-8"
+                >
+                  <div className="inline-flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-full px-4 py-1.5 mb-4">
+                    <Stethoscope className="w-3.5 h-3.5 text-primary" />
+                    <span className="text-xs font-semibold text-primary tracking-wider uppercase">
+                      GI-CDSS Patient Portal
+                    </span>
+                  </div>
+                  <h2 className="font-display text-3xl sm:text-4xl font-extrabold text-gradient-teal mb-2 tracking-tight">
+                    {ui.selectLang}
+                  </h2>
+                  <p className="text-muted-foreground text-sm">
+                    Choose your preferred language to begin the questionnaire
+                  </p>
+                </motion.div>
 
+                <div className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden">
+                  <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
+                  <div className="p-6 sm:p-8">
                     <div
-                      className="grid grid-cols-3 gap-4 mb-8"
+                      className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8"
                       data-ocid="questionnaire.language_select"
                     >
-                      {LANGUAGES.map((lang) => (
-                        <button
+                      {LANGUAGES.map((lang, i) => (
+                        <motion.button
                           type="button"
                           key={lang.code}
+                          initial={{ opacity: 0, y: 16 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.15 + i * 0.08 }}
+                          whileHover={{ y: -3, scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
                           onClick={() => setLanguage(lang.code)}
-                          className={`relative p-5 rounded-xl border-2 text-center transition-all duration-200 ${
+                          className={`relative p-6 rounded-2xl border-2 text-center transition-all duration-200 group ${
                             language === lang.code
                               ? "border-primary bg-primary/10 shadow-glow-teal"
-                              : "border-border/40 hover:border-primary/40 hover:bg-muted/30"
+                              : "border-border/40 hover:border-primary/50 hover:bg-muted/30"
                           }`}
                         >
                           {language === lang.code && (
-                            <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-primary" />
+                            <motion.div
+                              layoutId="lang-active"
+                              className="absolute inset-0 rounded-2xl bg-primary/5"
+                            />
                           )}
-                          <p
-                            className={`text-2xl font-bold mb-1 ${
-                              language === lang.code ? "text-primary" : ""
-                            }`}
-                          >
-                            {lang.native}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {lang.label}
-                          </p>
-                        </button>
+                          <div className="relative z-10">
+                            <div className="text-4xl mb-3">{lang.flag}</div>
+                            <p
+                              className={`text-2xl font-extrabold font-display mb-1.5 transition-colors ${
+                                language === lang.code
+                                  ? "text-gradient-teal"
+                                  : "text-foreground group-hover:text-primary/80"
+                              }`}
+                            >
+                              {lang.native}
+                            </p>
+                            <p className="text-xs text-muted-foreground mb-3">
+                              {lang.label}
+                            </p>
+                            <p
+                              className={`text-[11px] italic transition-colors ${
+                                language === lang.code
+                                  ? "text-primary/70"
+                                  : "text-muted-foreground/60"
+                              }`}
+                            >
+                              {lang.desc}
+                            </p>
+                          </div>
+                          {language === lang.code && (
+                            <motion.div
+                              initial={{ scale: 0 }}
+                              animate={{ scale: 1 }}
+                              className="absolute top-3 right-3 w-5 h-5 rounded-full bg-primary flex items-center justify-center"
+                            >
+                              <CheckCircle2 className="w-3 h-3 text-primary-foreground" />
+                            </motion.div>
+                          )}
+                        </motion.button>
                       ))}
                     </div>
 
                     <Button
                       onClick={handleLanguageNext}
                       disabled={isActorFetching}
-                      className="w-full h-12 rounded-xl btn-gradient font-semibold text-base gap-2.5"
+                      className="w-full h-14 rounded-2xl btn-gradient font-bold text-base gap-2.5 text-primary-foreground"
                       data-ocid="questionnaire.primary_button"
                     >
                       {isActorFetching ? (
@@ -433,7 +656,8 @@ export default function QuestionnairePage() {
                         </>
                       ) : (
                         <>
-                          {ui.startBtn} <ArrowRight className="w-5 h-5" />
+                          {ui.startBtn}
+                          <ArrowRight className="w-5 h-5" />
                         </>
                       )}
                     </Button>
@@ -442,38 +666,72 @@ export default function QuestionnairePage() {
               </motion.div>
             )}
 
-            {/* ── Demographics ── */}
+            {/* ══════════════════════════════
+                DEMOGRAPHICS
+            ══════════════════════════════ */}
             {phase === "demographics" && (
               <motion.div
                 key="demographics"
-                initial={{ opacity: 0, x: 30 }}
+                initial={{ opacity: 0, x: 40 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -30 }}
-                transition={{ duration: 0.35 }}
+                exit={{ opacity: 0, x: -40 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               >
+                {/* Step indicator */}
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center gap-3 mb-6"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground">
+                      1
+                    </div>
+                    <span className="text-sm font-semibold text-primary">
+                      Patient Details
+                    </span>
+                  </div>
+                  <div className="flex-1 h-[2px] bg-gradient-to-r from-primary/40 to-border/30 rounded-full" />
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-full bg-border/40 flex items-center justify-center text-xs font-semibold text-muted-foreground">
+                      2
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      Questionnaire
+                    </span>
+                  </div>
+                </motion.div>
+
                 <div
                   className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden"
                   data-ocid="questionnaire.demographics_card"
                 >
-                  <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
-                  <div className="p-8">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-11 h-11 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                  <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
+
+                  {/* Card header */}
+                  <div className="px-6 sm:px-8 pt-6 pb-5 border-b border-border/30 bg-primary/[0.03]">
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 rounded-xl bg-primary/12 border border-primary/25 flex items-center justify-center">
                         <User className="w-5 h-5 text-primary" />
                       </div>
                       <div>
-                        <h2 className="text-xl font-bold">{ui.demoTitle}</h2>
+                        <h2 className="text-xl font-bold font-display">
+                          {ui.demoTitle}
+                        </h2>
                         <p className="text-sm text-muted-foreground mt-0.5">
                           {ui.demoSubtitle}
                         </p>
                       </div>
                     </div>
+                  </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="space-y-1.5 sm:col-span-2">
+                  <div className="p-6 sm:p-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      {/* Full Name */}
+                      <div className="space-y-2 sm:col-span-2">
                         <Label
                           htmlFor="pt-name"
-                          className="text-sm font-medium"
+                          className="text-sm font-semibold text-foreground/90"
                         >
                           {ui.nameLabel}{" "}
                           <span className="text-destructive">*</span>
@@ -486,12 +744,16 @@ export default function QuestionnairePage() {
                           onChange={(e) =>
                             setDemo((d) => ({ ...d, name: e.target.value }))
                           }
-                          className="h-11 bg-input/50 border-border/60 focus:border-primary/60 rounded-xl"
+                          className="h-12 bg-input/60 border-border/60 focus:border-primary/70 focus:ring-2 focus:ring-primary/20 rounded-xl text-base transition-all"
                         />
                       </div>
 
-                      <div className="space-y-1.5">
-                        <Label htmlFor="pt-age" className="text-sm font-medium">
+                      {/* Age */}
+                      <div className="space-y-2">
+                        <Label
+                          htmlFor="pt-age"
+                          className="text-sm font-semibold text-foreground/90"
+                        >
                           {ui.ageLabel}{" "}
                           <span className="text-destructive">*</span>
                         </Label>
@@ -506,15 +768,16 @@ export default function QuestionnairePage() {
                           onChange={(e) =>
                             setDemo((d) => ({ ...d, age: e.target.value }))
                           }
-                          className="h-11 bg-input/50 border-border/60 focus:border-primary/60 rounded-xl"
+                          className="h-12 bg-input/60 border-border/60 focus:border-primary/70 focus:ring-2 focus:ring-primary/20 rounded-xl text-base transition-all"
                         />
                       </div>
 
-                      <div className="space-y-1.5">
-                        <Label className="text-sm font-medium">
+                      {/* Gender */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-semibold text-foreground/90">
                           {ui.genderLabel}
                         </Label>
-                        <div className="grid grid-cols-3 gap-2 h-11">
+                        <div className="grid grid-cols-3 gap-2">
                           {(["Male", "Female", "Other"] as const).map((g) => (
                             <button
                               type="button"
@@ -523,10 +786,10 @@ export default function QuestionnairePage() {
                               onClick={() =>
                                 setDemo((d) => ({ ...d, gender: g }))
                               }
-                              className={`h-11 rounded-xl border-2 text-sm font-medium transition-all duration-150 ${
+                              className={`h-12 rounded-xl border-2 text-sm font-semibold transition-all duration-150 ${
                                 demo.gender === g
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border/40 hover:border-primary/40 text-muted-foreground hover:text-foreground"
+                                  ? "border-primary bg-primary/12 text-primary shadow-glow-teal/20"
+                                  : "border-border/40 hover:border-primary/40 text-muted-foreground hover:text-foreground hover:bg-muted/30"
                               }`}
                             >
                               {g === "Male"
@@ -539,10 +802,11 @@ export default function QuestionnairePage() {
                         </div>
                       </div>
 
-                      <div className="space-y-1.5">
+                      {/* Address */}
+                      <div className="space-y-2">
                         <Label
                           htmlFor="pt-addr"
-                          className="text-sm font-medium"
+                          className="text-sm font-semibold text-foreground/90"
                         >
                           {ui.addressLabel}
                         </Label>
@@ -552,14 +816,21 @@ export default function QuestionnairePage() {
                           placeholder={ui.addressPh}
                           value={demo.address}
                           onChange={(e) =>
-                            setDemo((d) => ({ ...d, address: e.target.value }))
+                            setDemo((d) => ({
+                              ...d,
+                              address: e.target.value,
+                            }))
                           }
-                          className="h-11 bg-input/50 border-border/60 focus:border-primary/60 rounded-xl"
+                          className="h-12 bg-input/60 border-border/60 focus:border-primary/70 focus:ring-2 focus:ring-primary/20 rounded-xl text-base transition-all"
                         />
                       </div>
 
-                      <div className="space-y-1.5">
-                        <Label htmlFor="pt-occ" className="text-sm font-medium">
+                      {/* Occupation */}
+                      <div className="space-y-2">
+                        <Label
+                          htmlFor="pt-occ"
+                          className="text-sm font-semibold text-foreground/90"
+                        >
                           {ui.occLabel}
                         </Label>
                         <Input
@@ -573,34 +844,70 @@ export default function QuestionnairePage() {
                               occupation: e.target.value,
                             }))
                           }
-                          className="h-11 bg-input/50 border-border/60 focus:border-primary/60 rounded-xl"
+                          className="h-12 bg-input/60 border-border/60 focus:border-primary/70 focus:ring-2 focus:ring-primary/20 rounded-xl text-base transition-all"
                         />
                       </div>
                     </div>
 
-                    {demoError && (
-                      <p
-                        className="text-sm text-destructive mt-4 bg-destructive/8 border border-destructive/20 rounded-xl px-4 py-2.5"
-                        data-ocid="questionnaire.error_state"
-                      >
-                        {demoError}
-                      </p>
-                    )}
+                    <AnimatePresence>
+                      {demoError && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                          animate={{
+                            opacity: 1,
+                            height: "auto",
+                            marginTop: 16,
+                          }}
+                          exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                          className="flex items-start gap-2.5 bg-destructive/8 border border-destructive/25 rounded-xl px-4 py-3"
+                          data-ocid="questionnaire.error_state"
+                        >
+                          <AlertCircle className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
+                          <p className="text-sm text-destructive">
+                            {demoError}
+                          </p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <AnimatePresence>
+                      {retryStatus && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="flex items-center gap-3 bg-primary/8 border border-primary/25 rounded-xl px-4 py-3 mt-4"
+                          data-ocid="questionnaire.loading_state"
+                        >
+                          <Loader2 className="w-4 h-4 text-primary animate-spin flex-shrink-0" />
+                          <div>
+                            <p className="text-sm text-primary font-medium">
+                              Connecting to server, please wait...
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              Attempt {retryStatus.attempt} of{" "}
+                              {retryStatus.total}
+                            </p>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
 
                     <Button
                       onClick={handleDemoSubmit}
                       disabled={isSubmitting}
-                      className="w-full h-12 rounded-xl btn-gradient font-semibold gap-2.5 mt-6"
+                      className="w-full h-14 rounded-2xl btn-gradient font-bold text-base gap-2.5 mt-6 text-primary-foreground"
                       data-ocid="questionnaire.submit_button"
                     >
                       {isSubmitting ? (
                         <>
                           <Loader2 className="w-5 h-5 animate-spin" />{" "}
-                          {ui.loading}
+                          {retryStatus ? "Connecting..." : ui.loading}
                         </>
                       ) : (
                         <>
-                          {ui.demoBtn} <ArrowRight className="w-5 h-5" />
+                          {ui.demoBtn}
+                          <ArrowRight className="w-5 h-5" />
                         </>
                       )}
                     </Button>
@@ -609,131 +916,241 @@ export default function QuestionnairePage() {
               </motion.div>
             )}
 
-            {/* ── Questions ── */}
+            {/* ══════════════════════════════
+                QUESTIONS
+            ══════════════════════════════ */}
             {phase === "questions" && currentQuestion && (
               <motion.div
                 key={`q-${String(currentQuestionId)}`}
-                initial={{ opacity: 0, x: 30 }}
+                initial={{ opacity: 0, x: 40 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -30 }}
-                transition={{ duration: 0.3 }}
+                exit={{ opacity: 0, x: -40 }}
+                transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
               >
-                {/* Progress */}
-                <div className="mb-5">
-                  <div className="flex justify-between text-xs text-muted-foreground mb-2">
-                    <span className="font-medium">
-                      {ui.progress} {answeredIds.length + 1}
-                    </span>
-                    <span>{progressPct}% complete</span>
+                {/* ── Enhanced Progress ── */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 rounded-full px-3 py-1">
+                        <span className="text-xs font-bold text-primary">
+                          {ui.progress} {questionNum}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          / {QUESTIONS.length}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-xs font-semibold tabular-nums"
+                        style={{
+                          color: scaleColor(Math.ceil(progressPct / 10)),
+                        }}
+                      >
+                        {progressPct}%
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        complete
+                      </span>
+                    </div>
                   </div>
-                  <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
-                    <motion.div
-                      className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${progressPct}%` }}
-                      transition={{ duration: 0.4, ease: "easeOut" }}
-                    />
+
+                  {/* Segmented progress bar */}
+                  <div className="flex gap-1">
+                    {QUESTIONS.slice(0, Math.min(QUESTIONS.length, 20)).map(
+                      (q, idx) => (
+                        <motion.div
+                          key={String(q.id)}
+                          className="flex-1 h-2 rounded-full"
+                          style={{
+                            background:
+                              idx < answeredIds.length
+                                ? "oklch(0.74 0.17 178)"
+                                : idx === answeredIds.length
+                                  ? "oklch(0.74 0.17 178 / 0.4)"
+                                  : "oklch(var(--border))",
+                          }}
+                          initial={{ scaleX: 0 }}
+                          animate={{ scaleX: 1 }}
+                          transition={{ delay: idx * 0.02, duration: 0.2 }}
+                        />
+                      ),
+                    )}
                   </div>
                 </div>
 
+                {/* ── Question Card ── */}
                 <div
                   className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden"
                   data-ocid="questionnaire.question_card"
                 >
-                  <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
-                  <div className="p-8">
-                    <h2 className="text-xl sm:text-2xl font-bold leading-relaxed mb-6">
-                      {currentQuestion[language]}
-                    </h2>
+                  <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
 
-                    {error && (
-                      <p
-                        className="text-sm text-destructive mb-4 bg-destructive/8 border border-destructive/20 rounded-xl px-4 py-2.5"
-                        data-ocid="questionnaire.error_state"
+                  <div className="p-6 sm:p-8">
+                    {/* Question number badge + text */}
+                    <div className="flex items-start gap-3 mb-6">
+                      <div
+                        className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-sm font-extrabold font-display border"
+                        style={{
+                          background: "oklch(0.74 0.17 178 / 0.12)",
+                          borderColor: "oklch(0.74 0.17 178 / 0.3)",
+                          color: "oklch(0.74 0.17 178)",
+                        }}
                       >
-                        {error}
-                      </p>
-                    )}
+                        {questionNum}
+                      </div>
+                      <h2 className="text-xl sm:text-2xl font-bold leading-snug flex-1 pt-0.5">
+                        {currentQuestion[language]}
+                      </h2>
+                    </div>
 
-                    {/* Yes/No */}
+                    <AnimatePresence>
+                      {error && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="flex items-center gap-2 bg-destructive/8 border border-destructive/25 rounded-xl px-4 py-3 mb-4"
+                          data-ocid="questionnaire.error_state"
+                        >
+                          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+                          <p className="text-sm text-destructive">{error}</p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* ── Yes / No ── */}
                     {currentQuestion.type === "yesno" && (
                       <div className="grid grid-cols-2 gap-4">
-                        <button
+                        <motion.button
                           type="button"
                           data-ocid="questionnaire.yes_button"
                           onClick={() => submitAnswer("yes")}
                           disabled={isSubmitting}
-                          className="h-16 rounded-xl border-2 border-primary/40 bg-primary/8 hover:bg-primary/15 hover:border-primary text-primary font-bold text-lg transition-all duration-150 disabled:opacity-50 flex items-center justify-center"
+                          whileHover={{ scale: 1.03, y: -2 }}
+                          whileTap={{ scale: 0.97 }}
+                          className="h-20 rounded-2xl font-extrabold text-xl transition-all duration-200 disabled:opacity-50 flex flex-col items-center justify-center gap-1"
+                          style={{
+                            background:
+                              "linear-gradient(135deg, oklch(0.74 0.17 178), oklch(0.68 0.18 196))",
+                            color: "oklch(0.08 0.01 240)",
+                            boxShadow:
+                              "0 6px 24px oklch(0.74 0.17 178 / 0.35), 0 2px 8px oklch(0 0 0 / 0.2)",
+                          }}
                         >
                           {isSubmitting ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
+                            <Loader2 className="w-6 h-6 animate-spin" />
                           ) : (
-                            ui.yes
+                            <>
+                              <CheckCircle2 className="w-6 h-6" />
+                              <span>{ui.yes}</span>
+                            </>
                           )}
-                        </button>
-                        <button
+                        </motion.button>
+
+                        <motion.button
                           type="button"
                           data-ocid="questionnaire.no_button"
                           onClick={() => submitAnswer("no")}
                           disabled={isSubmitting}
-                          className="h-16 rounded-xl border-2 border-border/50 bg-muted/30 hover:bg-muted/50 hover:border-border font-bold text-lg transition-all duration-150 disabled:opacity-50 flex items-center justify-center"
+                          whileHover={{ scale: 1.03, y: -2 }}
+                          whileTap={{ scale: 0.97 }}
+                          className="h-20 rounded-2xl border-2 border-border/60 bg-muted/30 hover:bg-muted/50 hover:border-border font-extrabold text-xl transition-all duration-200 disabled:opacity-50 flex flex-col items-center justify-center gap-1 text-foreground/80"
                         >
                           {ui.no}
-                        </button>
+                        </motion.button>
                       </div>
                     )}
 
-                    {/* Choice */}
+                    {/* ── Choice ── */}
                     {currentQuestion.type === "choice" &&
                       currentQuestion.options && (
-                        <div className="space-y-3">
+                        <motion.div
+                          className="space-y-3"
+                          initial="hidden"
+                          animate="visible"
+                          variants={{
+                            visible: { transition: { staggerChildren: 0.06 } },
+                          }}
+                        >
                           {currentQuestion.options.map((opt, idx) => (
-                            <button
+                            <motion.button
                               type="button"
                               key={opt.value}
                               data-ocid={`questionnaire.choice.item.${idx + 1}`}
                               onClick={() => submitAnswer(opt.value)}
                               disabled={isSubmitting}
-                              className="w-full text-left px-5 py-4 rounded-xl border-2 border-border/40 bg-muted/20 hover:border-primary/50 hover:bg-primary/5 font-medium text-base transition-all duration-150 disabled:opacity-50 group"
+                              variants={{
+                                hidden: { opacity: 0, x: 12 },
+                                visible: { opacity: 1, x: 0 },
+                              }}
+                              whileHover={{ x: 4 }}
+                              whileTap={{ scale: 0.99 }}
+                              className="w-full text-left px-5 py-4 rounded-2xl border-2 border-border/40 bg-muted/15 hover:border-primary/60 hover:bg-primary/5 font-medium text-base transition-all duration-150 disabled:opacity-50 group"
                             >
-                              <span className="flex items-center gap-3">
-                                <span className="w-6 h-6 rounded-md border-2 border-border/60 group-hover:border-primary/60 flex items-center justify-center text-xs font-bold text-muted-foreground group-hover:text-primary transition-colors flex-shrink-0">
+                              <span className="flex items-center gap-4">
+                                <span className="w-8 h-8 rounded-xl border-2 border-border/60 group-hover:border-primary/70 flex items-center justify-center text-sm font-extrabold text-muted-foreground group-hover:text-primary group-hover:bg-primary/8 transition-all flex-shrink-0 font-display">
                                   {String.fromCharCode(65 + idx)}
                                 </span>
-                                {isSubmitting ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  opt[language]
-                                )}
+                                <span className="flex-1">
+                                  {isSubmitting ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    opt[language]
+                                  )}
+                                </span>
+                                <ChevronRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-primary/60 transition-colors flex-shrink-0" />
                               </span>
-                            </button>
+                            </motion.button>
                           ))}
-                        </div>
+                        </motion.div>
                       )}
 
-                    {/* Scale */}
+                    {/* ── Scale ── */}
                     {currentQuestion.type === "scale" && (
                       <div className="space-y-6">
-                        <div className="text-center">
-                          <span className="text-7xl font-bold text-gradient-teal">
-                            {scaleValue}
-                          </span>
-                          <span className="text-muted-foreground text-xl">
-                            {" "}
-                            / 10
+                        {/* Value display */}
+                        <div className="flex flex-col items-center gap-2 py-4">
+                          <motion.div
+                            key={scaleValue}
+                            initial={{ scale: 0.7, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{
+                              type: "spring",
+                              stiffness: 400,
+                              damping: 20,
+                            }}
+                            className="w-24 h-24 rounded-3xl border-4 flex flex-col items-center justify-center"
+                            style={{
+                              background: `${scaleColor(scaleValue)}22`,
+                              borderColor: scaleColor(scaleValue),
+                              boxShadow: `0 0 32px ${scaleColor(scaleValue)}50`,
+                            }}
+                          >
+                            <span
+                              className="text-5xl font-extrabold font-display"
+                              style={{ color: scaleColor(scaleValue) }}
+                            >
+                              {scaleValue}
+                            </span>
+                          </motion.div>
+                          <span
+                            className="text-sm font-semibold tracking-wider uppercase px-4 py-1.5 rounded-full"
+                            style={{
+                              background: `${scaleColor(scaleValue)}18`,
+                              color: scaleColor(scaleValue),
+                            }}
+                          >
+                            {scaleLabel(scaleValue)}
                           </span>
                         </div>
-                        <input
-                          type="range"
-                          min={1}
-                          max={10}
+
+                        <ScaleSlider
                           value={scaleValue}
-                          onChange={(e) =>
-                            setScaleValue(Number(e.target.value))
-                          }
-                          className="w-full"
+                          onChange={setScaleValue}
                         />
-                        <div className="flex justify-between text-xs text-muted-foreground">
+
+                        <div className="flex justify-between text-xs text-muted-foreground px-1">
                           <span className="bg-muted/50 px-3 py-1 rounded-full">
                             1 — Mild
                           </span>
@@ -741,17 +1158,19 @@ export default function QuestionnairePage() {
                             10 — Severe
                           </span>
                         </div>
+
                         <Button
                           data-ocid="questionnaire.next_button"
                           onClick={handleScaleSubmit}
                           disabled={isSubmitting}
-                          className="w-full h-12 rounded-xl btn-gradient font-semibold gap-2.5"
+                          className="w-full h-14 rounded-2xl btn-gradient font-bold text-base gap-2.5 text-primary-foreground"
                         >
                           {isSubmitting ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <Loader2 className="w-5 h-5 animate-spin" />
                           ) : (
                             <>
-                              {ui.next} <ArrowRight className="w-4 h-4" />
+                              {ui.next}
+                              <ArrowRight className="w-5 h-5" />
                             </>
                           )}
                         </Button>
@@ -762,39 +1181,115 @@ export default function QuestionnairePage() {
               </motion.div>
             )}
 
-            {/* ── Complete ── */}
+            {/* ══════════════════════════════
+                COMPLETE
+            ══════════════════════════════ */}
             {phase === "complete" && (
               <motion.div
                 key="complete"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.4 }}
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               >
                 <div
-                  className="rounded-2xl border border-primary/25 bg-card/80 backdrop-blur-md shadow-elevated text-center overflow-hidden"
+                  className="relative rounded-2xl border border-primary/30 bg-card/80 backdrop-blur-md shadow-elevated text-center overflow-hidden"
                   data-ocid="questionnaire.complete_card"
                 >
-                  <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
-                  <div className="p-12">
+                  {/* top accent */}
+                  <div className="h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent" />
+
+                  {/* particles */}
+                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                    {particles.current.map((p) => (
+                      <Particle key={p.id} delay={p.delay} x={p.x} y={p.y} />
+                    ))}
+                  </div>
+
+                  {/* bottom glow */}
+                  <div
+                    className="absolute bottom-0 left-0 right-0 h-40 pointer-events-none"
+                    style={{
+                      background:
+                        "radial-gradient(ellipse 60% 100% at 50% 100%, oklch(0.74 0.17 178 / 0.12) 0%, transparent 70%)",
+                    }}
+                  />
+
+                  <div className="relative z-10 p-10 sm:p-14">
+                    {/* Animated icon */}
                     <motion.div
-                      initial={{ scale: 0, rotate: -20 }}
+                      initial={{ scale: 0, rotate: -30 }}
                       animate={{ scale: 1, rotate: 0 }}
                       transition={{
-                        delay: 0.2,
+                        delay: 0.15,
                         type: "spring",
-                        stiffness: 200,
-                        damping: 15,
+                        stiffness: 220,
+                        damping: 14,
                       }}
-                      className="w-24 h-24 rounded-2xl bg-primary/12 border border-primary/25 flex items-center justify-center mx-auto mb-8 teal-glow"
+                      className="relative mx-auto mb-8 w-28 h-28"
                     >
-                      <CheckCircle2 className="w-12 h-12 text-primary" />
+                      {/* Pulsing ring */}
+                      <motion.div
+                        animate={{
+                          scale: [1, 1.25, 1],
+                          opacity: [0.5, 0, 0.5],
+                        }}
+                        transition={{
+                          duration: 2.5,
+                          repeat: Number.POSITIVE_INFINITY,
+                          ease: "easeInOut",
+                        }}
+                        className="absolute inset-0 rounded-full"
+                        style={{
+                          background:
+                            "radial-gradient(circle, oklch(0.74 0.17 178 / 0.4) 0%, transparent 70%)",
+                        }}
+                      />
+                      <div
+                        className="w-28 h-28 rounded-3xl flex items-center justify-center"
+                        style={{
+                          background:
+                            "linear-gradient(135deg, oklch(0.74 0.17 178 / 0.2), oklch(0.68 0.18 196 / 0.1))",
+                          border: "2px solid oklch(0.74 0.17 178 / 0.4)",
+                          boxShadow:
+                            "0 0 40px oklch(0.74 0.17 178 / 0.4), 0 0 80px oklch(0.74 0.17 178 / 0.15)",
+                        }}
+                      >
+                        <CheckCircle2
+                          className="w-14 h-14"
+                          style={{ color: "oklch(0.74 0.17 178)" }}
+                        />
+                      </div>
                     </motion.div>
-                    <h2 className="font-display text-4xl font-bold text-gradient-teal mb-4">
+
+                    <motion.h2
+                      initial={{ opacity: 0, y: 16 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.35 }}
+                      className="font-display text-5xl font-extrabold text-gradient-teal mb-4"
+                    >
                       {ui.thankYou}
-                    </h2>
-                    <p className="text-muted-foreground leading-relaxed max-w-sm mx-auto text-base">
+                    </motion.h2>
+
+                    <motion.p
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.5 }}
+                      className="text-muted-foreground leading-relaxed max-w-sm mx-auto text-base"
+                    >
                       {ui.thankYouMsg}
-                    </p>
+                    </motion.p>
+
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.65 }}
+                      className="mt-8 inline-flex items-center gap-2 bg-primary/8 border border-primary/20 rounded-full px-5 py-2.5"
+                    >
+                      <Stethoscope className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium text-primary/80">
+                        GI-CDSS · Clinical Decision Support
+                      </span>
+                    </motion.div>
                   </div>
                 </div>
               </motion.div>
@@ -803,8 +1298,8 @@ export default function QuestionnairePage() {
         </div>
       </main>
 
-      <footer className="text-center text-xs text-muted-foreground/50 py-6">
-        © {new Date().getFullYear()}. Built with love using{" "}
+      <footer className="text-center text-xs text-muted-foreground/50 py-6 relative z-10">
+        © {new Date().getFullYear()}. Built with ❤ using{" "}
         <a
           href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
           target="_blank"

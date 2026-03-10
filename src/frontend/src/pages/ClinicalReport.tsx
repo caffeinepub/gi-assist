@@ -9,13 +9,15 @@ import {
   ArrowLeft,
   CheckCircle2,
   ClipboardList,
+  FileDown,
   FlaskConical,
+  Loader2,
   Printer,
   Stethoscope,
   XCircle,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   type ClinicalReport as ClinicalReportType,
   analyzeSession,
@@ -37,8 +39,9 @@ function ConfidenceBar({ confidence }: { confidence: string }) {
         <motion.div
           className={`h-full rounded-full ${color}`}
           initial={{ width: 0 }}
-          animate={{ width: `${pct}%` }}
-          transition={{ duration: 0.6, ease: "easeOut", delay: 0.3 }}
+          whileInView={{ width: `${pct}%` }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.8, ease: "easeOut", delay: 0.2 }}
         />
       </div>
       <span
@@ -85,6 +88,8 @@ export default function ClinicalReportPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { sessionId?: string };
   const sessionId = search.sessionId ? BigInt(search.sessionId) : undefined;
+  const mainRef = useRef<HTMLDivElement>(null);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
 
   const { data: session, isLoading, isError } = useGetPatientSession(sessionId);
 
@@ -95,6 +100,28 @@ export default function ClinicalReportPage() {
 
   const handleBack = () => navigate({ to: "/dashboard" });
   const handlePrint = () => window.print();
+
+  const handleExportPDF = () => {
+    setIsExportingPDF(true);
+    const style = document.createElement("style");
+    style.id = "gi-pdf-print-style";
+    style.textContent = `
+      @media print {
+        body { background: #060812 !important; color: #eaecf5 !important;
+               -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        header, footer, .no-print { display: none !important; }
+        .print-section { break-inside: avoid; }
+        @page { size: A4; margin: 12mm; }
+      }
+    `;
+    document.head.appendChild(style);
+    setTimeout(() => {
+      window.print();
+      const el = document.getElementById("gi-pdf-print-style");
+      if (el) document.head.removeChild(el);
+      setIsExportingPDF(false);
+    }, 150);
+  };
 
   if (!sessionId) {
     return (
@@ -116,7 +143,7 @@ export default function ClinicalReportPage() {
 
       {/* Header */}
       <header className="relative border-b border-border/40 bg-card/60 backdrop-blur-md sticky top-0 z-20 no-print">
-        <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
+        <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button
@@ -139,25 +166,59 @@ export default function ClinicalReportPage() {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Badge className="bg-warning/12 text-warning border-warning/25 text-xs uppercase tracking-wider px-3">
-              Doctor Confidential
+          <div className="flex items-center gap-2">
+            {/* More prominent Doctor Confidential badge — amber with dark text */}
+            <Badge
+              className="text-xs uppercase tracking-wider px-3 py-1 font-bold"
+              style={{
+                background: "oklch(0.78 0.14 65 / 0.90)",
+                color: "oklch(0.10 0.015 240)",
+                borderColor: "oklch(0.78 0.14 65 / 0.40)",
+                border: "1px solid",
+              }}
+            >
+              &#128274; Doctor Confidential
             </Badge>
+            <Button
+              data-ocid="report.export_pdf_button"
+              size="sm"
+              onClick={handleExportPDF}
+              disabled={isExportingPDF || isLoading || !report}
+              className="gap-2 btn-gradient rounded-xl h-9 px-4 text-xs font-bold"
+            >
+              {isExportingPDF ? (
+                <>
+                  <Loader2
+                    data-ocid="report.pdf_loading_state"
+                    className="w-3.5 h-3.5 animate-spin"
+                  />
+                  Preparing...
+                </>
+              ) : (
+                <>
+                  <FileDown className="w-3.5 h-3.5" />
+                  Export PDF
+                </>
+              )}
+            </Button>
             <Button
               data-ocid="report.print_button"
               variant="outline"
               size="sm"
               onClick={handlePrint}
-              className="gap-2 border-border/50 rounded-xl hover:border-primary/30"
+              className="gap-2 border-border/50 rounded-xl hover:border-primary/30 h-9"
             >
-              <Printer className="w-4 h-4" />
+              <Printer className="w-3.5 h-3.5" />
               Print
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-5">
+      <main
+        ref={mainRef}
+        className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-5"
+      >
         {isLoading && (
           <div data-ocid="report.loading_state" className="space-y-4">
             {[1, 2, 3, 4].map((n) => (
@@ -181,27 +242,27 @@ export default function ClinicalReportPage() {
 
         {!isLoading && !isError && report && (
           <>
-            {/* Red Flag Banner */}
+            {/* Red Flag Banner — left border accent, richer destructive */}
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               data-ocid="report.red_flags_panel"
               className="print-section"
             >
               {report.redFlags.length > 0 ? (
-                <div className="rounded-2xl border border-destructive/40 bg-destructive/8 overflow-hidden">
-                  <div className="h-[2px] bg-gradient-to-r from-destructive/70 via-destructive to-destructive/70" />
+                <div className="rounded-2xl border border-destructive/35 bg-destructive/7 overflow-hidden border-l-4 border-l-destructive/70">
                   <div className="p-6">
                     <div className="flex items-center gap-3 mb-5">
                       <div className="w-10 h-10 rounded-xl bg-destructive/15 border border-destructive/30 flex items-center justify-center">
                         <AlertTriangle className="w-5 h-5 text-destructive" />
                       </div>
                       <div>
-                        <h3 className="font-bold text-destructive text-lg">
+                        <h3 className="font-display font-bold text-destructive text-lg">
                           Alarm Features Detected
                         </h3>
-                        <p className="text-xs text-destructive/70 mt-0.5">
+                        <p className="text-xs text-destructive/65 mt-0.5">
                           {report.redFlags.length} alarm feature
                           {report.redFlags.length !== 1 ? "s" : ""} require
                           immediate clinical attention
@@ -209,9 +270,13 @@ export default function ClinicalReportPage() {
                       </div>
                     </div>
                     <div className="space-y-3">
-                      {report.redFlags.map((flag) => (
-                        <div
+                      {report.redFlags.map((flag, idx) => (
+                        <motion.div
                           key={flag.label}
+                          initial={{ opacity: 0, x: -16 }}
+                          whileInView={{ opacity: 1, x: 0 }}
+                          viewport={{ once: true }}
+                          transition={{ delay: idx * 0.08, duration: 0.4 }}
                           className={`flex items-start gap-3 p-4 rounded-xl border ${
                             flag.severity === "critical"
                               ? "bg-destructive/10 border-destructive/30"
@@ -250,13 +315,13 @@ export default function ClinicalReportPage() {
                               {flag.rationale}
                             </p>
                           </div>
-                        </div>
+                        </motion.div>
                       ))}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-success/30 bg-success/6 p-5 flex items-center gap-4">
+                <div className="rounded-2xl border border-success/30 bg-success/6 p-5 flex items-center gap-4 border-l-4 border-l-success/50">
                   <div className="w-10 h-10 rounded-xl bg-success/10 border border-success/25 flex items-center justify-center flex-shrink-0">
                     <CheckCircle2 className="w-5 h-5 text-success" />
                   </div>
@@ -264,7 +329,7 @@ export default function ClinicalReportPage() {
                     <p className="font-semibold text-success">
                       No Alarm Features Detected
                     </p>
-                    <p className="text-xs text-success/70 mt-0.5">
+                    <p className="text-xs text-success/65 mt-0.5">
                       No red flag symptoms identified in this session
                     </p>
                   </div>
@@ -274,16 +339,17 @@ export default function ClinicalReportPage() {
 
             {/* Classification */}
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.07 }}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: 0.07 }}
               data-ocid="report.classification_card"
               className="print-section"
             >
-              <Card className="border-border/40 rounded-2xl overflow-hidden">
-                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+              <Card className="border-border/40 rounded-2xl overflow-hidden hover:border-primary/30 hover:shadow-glow-teal transition-all duration-300">
+                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
                 <CardHeader className="pb-4">
-                  <CardTitle className="flex items-center gap-2.5 text-base">
+                  <CardTitle className="flex items-center gap-2.5 font-display text-base">
                     <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
                       <ClipboardList className="w-4 h-4 text-primary" />
                     </div>
@@ -301,16 +367,17 @@ export default function ClinicalReportPage() {
 
             {/* Differentials */}
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.14 }}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: 0.1 }}
               data-ocid="report.differentials_table"
               className="print-section"
             >
-              <Card className="border-border/40 rounded-2xl overflow-hidden">
-                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+              <Card className="border-border/40 rounded-2xl overflow-hidden hover:border-primary/30 hover:shadow-glow-teal transition-all duration-300">
+                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
                 <CardHeader className="pb-4">
-                  <CardTitle className="flex items-center gap-2.5 text-base">
+                  <CardTitle className="flex items-center gap-2.5 font-display text-base">
                     <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
                       <Stethoscope className="w-4 h-4 text-primary" />
                     </div>
@@ -327,8 +394,12 @@ export default function ClinicalReportPage() {
                   ) : (
                     <div className="divide-y divide-border/30">
                       {report.differentials.map((diff, idx) => (
-                        <div
+                        <motion.div
                           key={diff.condition}
+                          initial={{ opacity: 0, x: -12 }}
+                          whileInView={{ opacity: 1, x: 0 }}
+                          viewport={{ once: true }}
+                          transition={{ delay: idx * 0.07, duration: 0.4 }}
                           className="px-6 py-4 hover:bg-muted/20 transition-colors"
                         >
                           <div className="flex items-start justify-between gap-4 mb-2">
@@ -354,7 +425,7 @@ export default function ClinicalReportPage() {
                           <div className="pl-9">
                             <ConfidenceBar confidence={diff.confidence} />
                           </div>
-                        </div>
+                        </motion.div>
                       ))}
                     </div>
                   )}
@@ -362,18 +433,19 @@ export default function ClinicalReportPage() {
               </Card>
             </motion.div>
 
-            {/* Investigations */}
+            {/* Investigations — numbered badges instead of dot bullets */}
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.21 }}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: 0.1 }}
               data-ocid="report.investigations_panel"
               className="print-section"
             >
-              <Card className="border-border/40 rounded-2xl overflow-hidden">
-                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+              <Card className="border-border/40 rounded-2xl overflow-hidden hover:border-primary/30 hover:shadow-glow-teal transition-all duration-300">
+                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
                 <CardHeader className="pb-4">
-                  <CardTitle className="flex items-center gap-2.5 text-base">
+                  <CardTitle className="flex items-center gap-2.5 font-display text-base">
                     <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
                       <FlaskConical className="w-4 h-4 text-primary" />
                     </div>
@@ -387,14 +459,21 @@ export default function ClinicalReportPage() {
                     </p>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {report.suggestedInvestigations.map((inv) => (
-                        <div
+                      {report.suggestedInvestigations.map((inv, idx) => (
+                        <motion.div
                           key={inv}
-                          className="flex items-center gap-2.5 text-sm px-3.5 py-2.5 rounded-xl bg-primary/5 border border-primary/15"
+                          initial={{ opacity: 0, scale: 0.97 }}
+                          whileInView={{ opacity: 1, scale: 1 }}
+                          viewport={{ once: true }}
+                          transition={{ delay: idx * 0.04, duration: 0.35 }}
+                          className="flex items-center gap-3 text-sm px-3.5 py-2.5 rounded-xl bg-primary/5 border border-primary/12"
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
-                          {inv}
-                        </div>
+                          {/* Numbered badge instead of dot */}
+                          <span className="w-5 h-5 rounded-md bg-primary/15 text-primary text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+                            {idx + 1}
+                          </span>
+                          <span className="text-sm">{inv}</span>
+                        </motion.div>
                       ))}
                     </div>
                   )}
@@ -404,16 +483,17 @@ export default function ClinicalReportPage() {
 
             {/* Patient Answers */}
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.28 }}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: 0.1 }}
               data-ocid="report.answers_panel"
               className="print-section"
             >
-              <Card className="border-border/40 rounded-2xl overflow-hidden">
-                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-border/60 to-transparent" />
+              <Card className="border-border/40 rounded-2xl overflow-hidden hover:border-border/50 transition-all duration-300">
+                <div className="h-[1.5px] bg-gradient-to-r from-transparent via-border/50 to-transparent" />
                 <CardHeader className="pb-4">
-                  <CardTitle className="text-base">
+                  <CardTitle className="font-display text-base">
                     Patient Answers Summary
                   </CardTitle>
                 </CardHeader>
@@ -443,13 +523,13 @@ export default function ClinicalReportPage() {
         )}
       </main>
 
-      <footer className="text-center text-xs text-muted-foreground/50 py-8 no-print">
-        © {new Date().getFullYear()}. Built with love using{" "}
+      <footer className="text-center text-xs text-muted-foreground/40 py-8 no-print">
+        &copy; {new Date().getFullYear()}. Built with love using{" "}
         <a
           href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-primary/60 hover:text-primary transition-colors"
+          className="text-primary/50 hover:text-primary transition-colors"
         >
           caffeine.ai
         </a>

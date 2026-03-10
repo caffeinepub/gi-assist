@@ -1,6 +1,7 @@
 import type { Principal } from "@icp-sdk/core/principal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Doctor, PatientSession } from "../backend.d";
+import { withCanisterRetry } from "../utils/retryCanister";
 import { useActor } from "./useActor";
 import { useInternetIdentity } from "./useInternetIdentity";
 
@@ -79,7 +80,7 @@ export function useRegisterDoctor() {
       email: string;
     }) => {
       if (!actor) throw new Error("Not connected");
-      await actor.registerDoctor(name, clinic, email);
+      await withCanisterRetry(() => actor.registerDoctor(name, clinic, email));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["doctor"] });
@@ -94,12 +95,18 @@ export function useCreatePatientSession() {
     mutationFn: async ({
       doctorId,
       language,
+      onRetry,
     }: {
       doctorId: Principal;
       language: string;
+      onRetry?: (attempt: number, total: number) => void;
     }) => {
       if (!actor) throw new Error("Not connected");
-      return await actor.createPatientSession(doctorId, language);
+      return await withCanisterRetry(
+        () => actor.createPatientSession(doctorId, language),
+        5,
+        onRetry,
+      );
     },
   });
 }
@@ -118,7 +125,9 @@ export function useAnswerQuestion() {
       answer: string;
     }) => {
       if (!actor) throw new Error("Not connected");
-      await actor.answerQuestion(sessionId, questionId, answer);
+      await withCanisterRetry(() =>
+        actor.answerQuestion(sessionId, questionId, answer),
+      );
     },
   });
 }
@@ -129,7 +138,7 @@ export function useCompleteSession() {
   return useMutation({
     mutationFn: async ({ sessionId }: { sessionId: bigint }) => {
       if (!actor) throw new Error("Not connected");
-      await actor.completeSession(sessionId);
+      await withCanisterRetry(() => actor.completeSession(sessionId));
     },
   });
 }
