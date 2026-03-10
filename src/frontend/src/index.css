@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Fonts ─────────────────────────────────────────── */
+@font-face {
+  font-family: "Fraunces";
+  src: url("/assets/fonts/Fraunces.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Outfit";
+  src: url("/assets/fonts/Outfit.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── OKLCH Design Tokens ────────────────────────────── */
+:root {
+  /* Dark medical palette */
+  --background: 0.11 0.018 240;
+  --foreground: 0.93 0.012 240;
+
+  --card: 0.145 0.022 240;
+  --card-foreground: 0.93 0.012 240;
+
+  --popover: 0.145 0.022 240;
+  --popover-foreground: 0.93 0.012 240;
+
+  /* Teal primary */
+  --primary: 0.72 0.14 176;
+  --primary-foreground: 0.08 0.01 240;
+
+  --secondary: 0.19 0.025 240;
+  --secondary-foreground: 0.78 0.02 240;
+
+  --muted: 0.17 0.022 240;
+  --muted-foreground: 0.56 0.03 240;
+
+  /* Amber accent */
+  --accent: 0.8 0.13 75;
+  --accent-foreground: 0.12 0.02 240;
+
+  /* Red destructive */
+  --destructive: 0.62 0.2 25;
+  --destructive-foreground: 0.97 0.01 25;
+
+  /* Green success */
+  --success: 0.72 0.15 145;
+  --success-foreground: 0.97 0.01 145;
+
+  /* Warning = amber */
+  --warning: 0.8 0.13 75;
+  --warning-foreground: 0.12 0.02 240;
+
+  --border: 0.22 0.018 240;
+  --input: 0.19 0.022 240;
+  --ring: 0.72 0.14 176;
+
+  --radius: 0.75rem;
+
+  /* Charts */
+  --chart-1: 0.72 0.14 176;
+  --chart-2: 0.8 0.13 75;
+  --chart-3: 0.72 0.15 145;
+  --chart-4: 0.62 0.2 25;
+  --chart-5: 0.68 0.12 290;
+
+  /* Sidebar */
+  --sidebar: 0.13 0.02 240;
+  --sidebar-foreground: 0.93 0.012 240;
+  --sidebar-primary: 0.72 0.14 176;
+  --sidebar-primary-foreground: 0.08 0.01 240;
+  --sidebar-accent: 0.17 0.022 240;
+  --sidebar-accent-foreground: 0.78 0.02 240;
+  --sidebar-border: 0.22 0.018 240;
+  --sidebar-ring: 0.72 0.14 176;
+}
+
+.dark {
+  --background: 0.11 0.018 240;
+  --foreground: 0.93 0.012 240;
+  --card: 0.145 0.022 240;
+  --card-foreground: 0.93 0.012 240;
+  --popover: 0.145 0.022 240;
+  --popover-foreground: 0.93 0.012 240;
+  --primary: 0.72 0.14 176;
+  --primary-foreground: 0.08 0.01 240;
+  --secondary: 0.19 0.025 240;
+  --secondary-foreground: 0.78 0.02 240;
+  --muted: 0.17 0.022 240;
+  --muted-foreground: 0.56 0.03 240;
+  --accent: 0.8 0.13 75;
+  --accent-foreground: 0.12 0.02 240;
+  --destructive: 0.62 0.2 25;
+  --destructive-foreground: 0.97 0.01 25;
+  --success: 0.72 0.15 145;
+  --success-foreground: 0.97 0.01 145;
+  --warning: 0.8 0.13 75;
+  --warning-foreground: 0.12 0.02 240;
+  --border: 0.22 0.018 240;
+  --input: 0.19 0.022 240;
+  --ring: 0.72 0.14 176;
+  --sidebar: 0.13 0.02 240;
+  --sidebar-foreground: 0.93 0.012 240;
+  --sidebar-primary: 0.72 0.14 176;
+  --sidebar-primary-foreground: 0.08 0.01 240;
+  --sidebar-accent: 0.17 0.022 240;
+  --sidebar-accent-foreground: 0.78 0.02 240;
+  --sidebar-border: 0.22 0.018 240;
+  --sidebar-ring: 0.72 0.14 176;
+}
+
+/* ── Base Resets ────────────────────────────────────── */
+* {
+  border-color: oklch(var(--border));
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: oklch(var(--background));
+  color: oklch(var(--foreground));
+  font-family: "Outfit", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: oklch(var(--background));
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(var(--muted-foreground));
+}
+
+/* ── Utility Classes ────────────────────────────────── */
+.card-glow {
+  box-shadow: 0 0 0 1px oklch(var(--border)), 0 4px 24px -4px
+    oklch(0.72 0.14 176 / 0.12), 0 2px 8px -2px oklch(0 0 0 / 0.3);
+}
+
+.teal-glow {
+  box-shadow: 0 0 20px oklch(0.72 0.14 176 / 0.35), 0 0 40px
+    oklch(0.72 0.14 176 / 0.15);
+}
+
+.text-gradient-teal {
+  background: linear-gradient(135deg, oklch(0.85 0.14 176), oklch(0.7 0.18 200));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.btn-gradient {
+  background: linear-gradient(
+    135deg,
+    oklch(0.72 0.14 176),
+    oklch(0.65 0.18 196)
+  );
+  color: oklch(0.08 0.01 240);
+  transition: opacity 0.2s, transform 0.15s;
+}
+.btn-gradient:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+.btn-gradient:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ── Range input ─────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: oklch(var(--border));
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: oklch(var(--primary));
+  cursor: pointer;
+  box-shadow: 0 0 8px oklch(0.72 0.14 176 / 0.5);
+  transition: transform 0.15s;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
