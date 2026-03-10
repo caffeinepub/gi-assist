@@ -15,7 +15,7 @@ import {
   User,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useActor } from "../hooks/useActor";
 import {
   useAnswerQuestion,
@@ -23,6 +23,14 @@ import {
   useCreatePatientSession,
 } from "../hooks/useQueries";
 import { QUESTIONS, QUESTION_MAP, SCALE_NEXT } from "../questions";
+import {
+  type LocalSession,
+  clearLocalSession,
+  createLocalSession,
+  loadLocalSession,
+  saveLocalSession,
+} from "../utils/localSession";
+import { withCanisterRetry } from "../utils/retryCanister";
 
 export const DEMO_Q = {
   name: 900n,
@@ -33,6 +41,7 @@ export const DEMO_Q = {
 } as const;
 
 type Language = "en" | "hi" | "mr";
+type SyncStatus = "idle" | "syncing" | "synced" | "offline";
 
 const LANGUAGES = [
   {
@@ -71,7 +80,6 @@ const UI: Record<
     progress: string;
     thankYou: string;
     thankYouMsg: string;
-    errorMsg: string;
     loading: string;
     demoTitle: string;
     demoSubtitle: string;
@@ -88,6 +96,10 @@ const UI: Record<
     male: string;
     female: string;
     other: string;
+    resumeTitle: string;
+    resumeMsg: string;
+    resumeBtn: string;
+    restartBtn: string;
   }
 > = {
   en: {
@@ -102,7 +114,6 @@ const UI: Record<
     thankYou: "Thank You!",
     thankYouMsg:
       "Your responses have been submitted. Your doctor will review your answers shortly.",
-    errorMsg: "Something went wrong. Please try again.",
     loading: "Loading...",
     demoTitle: "Patient Details",
     demoSubtitle:
@@ -120,6 +131,11 @@ const UI: Record<
     male: "Male",
     female: "Female",
     other: "Other",
+    resumeTitle: "Welcome back!",
+    resumeMsg:
+      "You have an unfinished questionnaire. Would you like to continue where you left off?",
+    resumeBtn: "Continue",
+    restartBtn: "Start fresh",
   },
   hi: {
     title: "GI-CDSS",
@@ -133,7 +149,6 @@ const UI: Record<
     thankYou: "धन्यवाद!",
     thankYouMsg:
       "आपके उत्तर सबमिट हो गए हैं। आपके डॉक्टर जल्द ही उत्तरों की समीक्षा करेंगे।",
-    errorMsg: "कुछ गलत हो गया। कृपया पुनः प्रयास करें।",
     loading: "लोड हो रहा है...",
     demoTitle: "रोगी की जानकारी",
     demoSubtitle: "प्रश्नावली शुरू करने से पहले कृपया अपनी जानकारी भरें।",
@@ -150,6 +165,10 @@ const UI: Record<
     male: "पुरुष",
     female: "महिला",
     other: "अन्य",
+    resumeTitle: "स्वागत है!",
+    resumeMsg: "आपकी अधूरी प्रश्नावली है। क्या आप जारी रखना चाहते हैं?",
+    resumeBtn: "जारी रखें",
+    restartBtn: "नए सिरे शुरू करें",
   },
   mr: {
     title: "GI-CDSS",
@@ -163,7 +182,6 @@ const UI: Record<
     thankYou: "धन्यवाद!",
     thankYouMsg:
       "तुमचे उत्तर सबमिट केले गेले आहेत. तुमचे डॉक्टर लवकरच तुमच्या उत्तरांचे पुनरावलोकन करतील.",
-    errorMsg: "काहीतरी चूक झाली. कृपया पुन्हा प्रयत्न करा.",
     loading: "लोड होत आहे...",
     demoTitle: "रुग्णाची माहिती",
     demoSubtitle: "प्रश्नावली सुरू करण्यापूर्वी कृपया तुमची माहिती भरा.",
@@ -180,10 +198,14 @@ const UI: Record<
     male: "पुरुष",
     female: "स्त्री",
     other: "इतर",
+    resumeTitle: "परत स्वागत!",
+    resumeMsg: "तुमची अपूर्ण प्रश्नावली आहे. तुम्ही पुढे जायचे आहे का?",
+    resumeBtn: "पुढे चालू ठेवा",
+    restartBtn: "नव्याने सुरू करा",
   },
 };
 
-type Phase = "language" | "demographics" | "questions" | "complete";
+type Phase = "language" | "resume" | "demographics" | "questions" | "complete";
 
 interface Demographics {
   name: string;
@@ -191,6 +213,39 @@ interface Demographics {
   gender: string;
   address: string;
   occupation: string;
+}
+
+/* ── Sync status bar (top 3px) ── */
+function SyncBar({ status }: { status: SyncStatus }) {
+  const color =
+    status === "synced"
+      ? "oklch(0.73 0.17 148)"
+      : status === "syncing"
+        ? "oklch(0.74 0.17 178)"
+        : "oklch(0.82 0.15 72)";
+
+  return (
+    <motion.div
+      className="fixed top-0 left-0 right-0 h-[3px] z-50 pointer-events-none overflow-hidden"
+      animate={{ opacity: status === "idle" ? 0 : 1 }}
+      transition={{ duration: 0.4 }}
+    >
+      {status === "syncing" ? (
+        <motion.div
+          className="absolute top-0 h-full rounded-full w-[40%]"
+          style={{ background: color }}
+          animate={{ left: ["-40%", "140%"] }}
+          transition={{
+            duration: 1.8,
+            repeat: Number.POSITIVE_INFINITY,
+            ease: "easeInOut",
+          }}
+        />
+      ) : (
+        <div className="h-full w-full" style={{ background: color }} />
+      )}
+    </motion.div>
+  );
 }
 
 /* ── Floating particle for complete screen ── */
@@ -220,13 +275,12 @@ function Particle({ delay, x, y }: { delay: number; x: number; y: number }) {
   );
 }
 
-/* ── Scale color by value ── */
+/* ── Scale helpers ── */
 function scaleColor(val: number): string {
-  if (val <= 3) return "oklch(0.73 0.17 148)"; // green
-  if (val <= 6) return "oklch(0.82 0.15 72)"; // amber
-  return "oklch(0.62 0.22 22)"; // red
+  if (val <= 3) return "oklch(0.73 0.17 148)";
+  if (val <= 6) return "oklch(0.82 0.15 72)";
+  return "oklch(0.62 0.22 22)";
 }
-
 function scaleLabel(val: number): string {
   if (val <= 3) return "Mild";
   if (val <= 6) return "Moderate";
@@ -234,7 +288,6 @@ function scaleLabel(val: number): string {
   return "Very Severe";
 }
 
-/* ── Styled range slider fill via CSS var trick ── */
 function ScaleSlider({
   value,
   onChange,
@@ -279,7 +332,7 @@ function ScaleSlider({
 
 export default function QuestionnairePage() {
   const search = useSearch({ strict: false }) as { doctorId?: string };
-  const doctorId = search.doctorId;
+  const doctorId = search.doctorId ?? "";
 
   const { actor, isFetching: isActorFetching } = useActor();
   const createSession = useCreatePatientSession();
@@ -296,18 +349,13 @@ export default function QuestionnairePage() {
     occupation: "",
   });
   const [demoError, setDemoError] = useState("");
-  const [sessionId, setSessionId] = useState<bigint | null>(null);
   const [currentQuestionId, setCurrentQuestionId] = useState<bigint>(1n);
   const [answeredIds, setAnsweredIds] = useState<bigint[]>([]);
   const [scaleValue, setScaleValue] = useState<number>(5);
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [retryStatus, setRetryStatus] = useState<{
-    attempt: number;
-    total: number;
-  } | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
 
-  // particles for complete screen
+  const localSession = useRef<LocalSession | null>(null);
+
   const particles = useRef(
     Array.from({ length: 18 }, (_, i) => ({
       id: i,
@@ -322,17 +370,176 @@ export default function QuestionnairePage() {
   const progressPct = Math.round((answeredIds.length / QUESTIONS.length) * 100);
   const questionNum = answeredIds.length + 1;
 
+  // On mount: check for saved local session
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
+  useEffect(() => {
+    if (!doctorId) return;
+    const saved = loadLocalSession(doctorId);
+    if (saved && !saved.completed) {
+      localSession.current = saved;
+      setLanguage(saved.language as Language);
+      setPhase("resume");
+    }
+  }, []);
+
   // Scroll to top on phase/question change
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on question navigation
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on navigation
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [phase, answeredIds.length]);
 
+  /* ── Full background sync of entire session ── */
+  const syncSessionToCanister = useCallback(
+    async (session: LocalSession) => {
+      if (!actor || !doctorId) return;
+      setSyncStatus("syncing");
+      try {
+        let principal: Principal;
+        try {
+          principal = PrincipalClass.fromText(doctorId) as unknown as Principal;
+        } catch {
+          setSyncStatus("offline");
+          return;
+        }
+
+        const sid = await withCanisterRetry(
+          () =>
+            createSession.mutateAsync({
+              doctorId: principal,
+              language: session.language,
+            }),
+          10,
+        );
+
+        const sidStr = String(sid);
+
+        const demoEntries: Array<{ questionId: bigint; answer: string }> = [
+          { questionId: DEMO_Q.name, answer: session.demographics.name },
+          { questionId: DEMO_Q.age, answer: session.demographics.age },
+          { questionId: DEMO_Q.gender, answer: session.demographics.gender },
+          {
+            questionId: DEMO_Q.address,
+            answer: session.demographics.address || "—",
+          },
+          {
+            questionId: DEMO_Q.occupation,
+            answer: session.demographics.occupation || "—",
+          },
+        ];
+
+        for (const { questionId, answer } of demoEntries) {
+          await withCanisterRetry(
+            () =>
+              answerQuestion.mutateAsync({
+                sessionId: BigInt(sidStr),
+                questionId,
+                answer,
+              }),
+            10,
+          );
+        }
+
+        for (const [qIdStr, answer] of Object.entries(session.answers)) {
+          await withCanisterRetry(
+            () =>
+              answerQuestion.mutateAsync({
+                sessionId: BigInt(sidStr),
+                questionId: BigInt(qIdStr),
+                answer,
+              }),
+            10,
+          );
+        }
+
+        if (session.completed) {
+          await withCanisterRetry(
+            () => completeSession.mutateAsync({ sessionId: BigInt(sidStr) }),
+            10,
+          );
+        }
+
+        const updated = { ...session, syncedSessionId: sidStr };
+        localSession.current = updated;
+        saveLocalSession(updated);
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus("idle"), 3000);
+      } catch {
+        setSyncStatus("offline");
+        setTimeout(() => setSyncStatus("idle"), 4000);
+      }
+    },
+    [actor, doctorId, createSession, answerQuestion, completeSession],
+  );
+
+  /* ── Background sync single answer ── */
+  const bgSyncAnswer = useCallback(
+    async (session: LocalSession, questionId: bigint, answer: string) => {
+      if (!session.syncedSessionId) return;
+      try {
+        setSyncStatus("syncing");
+        await withCanisterRetry(
+          () =>
+            answerQuestion.mutateAsync({
+              sessionId: BigInt(session.syncedSessionId as string),
+              questionId,
+              answer,
+            }),
+          10,
+        );
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus("idle"), 2000);
+      } catch {
+        setSyncStatus("offline");
+        setTimeout(() => setSyncStatus("idle"), 3000);
+      }
+    },
+    [answerQuestion],
+  );
+
+  /* ── Resume handlers ── */
+  const handleResume = () => {
+    const saved = localSession.current;
+    if (!saved) return;
+    setDemo(saved.demographics as Demographics);
+    const answeredQIds = Object.keys(saved.answers)
+      .map((k) => BigInt(k))
+      .filter((id) => id < 900n);
+    setAnsweredIds(answeredQIds);
+    if (answeredQIds.length > 0) {
+      const lastAnswered = answeredQIds[answeredQIds.length - 1];
+      const lastQ = QUESTION_MAP.get(lastAnswered);
+      if (lastQ) {
+        const lastAns = saved.answers[String(lastAnswered)];
+        let nextId: bigint | undefined;
+        if (lastQ.type === "scale") {
+          nextId = SCALE_NEXT[String(lastQ.id)];
+        } else {
+          nextId = lastQ.nextMap?.[lastAns];
+        }
+        if (nextId !== undefined) {
+          setCurrentQuestionId(nextId);
+        }
+      }
+    }
+    setPhase("questions");
+  };
+
+  const handleRestartFresh = () => {
+    if (doctorId) clearLocalSession(doctorId);
+    localSession.current = null;
+    setPhase("language");
+    setAnsweredIds([]);
+    setCurrentQuestionId(1n);
+    setDemo({ name: "", age: "", gender: "Male", address: "", occupation: "" });
+  };
+
+  /* ── Language → Demographics ── */
   const handleLanguageNext = () => {
     setPhase("demographics");
   };
 
-  const handleDemoSubmit = async () => {
+  /* ── Demographics submit (LOCAL FIRST) ── */
+  const handleDemoSubmit = () => {
     if (!demo.name.trim()) {
       setDemoError("Please enter your name.");
       return;
@@ -346,92 +553,56 @@ export default function QuestionnairePage() {
       setDemoError("Please enter a valid age (1–120).");
       return;
     }
-    if (!doctorId || !actor) {
+    if (!doctorId) {
       setDemoError(
         "Invalid link. Please ask your doctor for a valid questionnaire link.",
       );
       return;
     }
+
     setDemoError("");
-    setIsSubmitting(true);
-    try {
-      let principal: Principal;
-      try {
-        principal = PrincipalClass.fromText(doctorId) as unknown as Principal;
-      } catch {
-        setDemoError("Invalid doctor ID in link.");
-        setIsSubmitting(false);
-        return;
-      }
 
-      const id = await createSession.mutateAsync({
-        doctorId: principal,
-        language,
-        onRetry: (attempt: number, total: number) => {
-          setRetryStatus({ attempt, total });
-        },
-      });
-      setRetryStatus(null);
-      setSessionId(id);
+    // Save locally FIRST — instant, no waiting for server
+    const session = createLocalSession(doctorId, language, {
+      name: demo.name.trim(),
+      age: demo.age.trim(),
+      gender: demo.gender,
+      address: demo.address.trim(),
+      occupation: demo.occupation.trim(),
+    });
+    localSession.current = session;
+    saveLocalSession(session);
 
-      await answerQuestion.mutateAsync({
-        sessionId: id,
-        questionId: DEMO_Q.name,
-        answer: demo.name.trim(),
-      });
-      await answerQuestion.mutateAsync({
-        sessionId: id,
-        questionId: DEMO_Q.age,
-        answer: demo.age.trim(),
-      });
-      await answerQuestion.mutateAsync({
-        sessionId: id,
-        questionId: DEMO_Q.gender,
-        answer: demo.gender,
-      });
-      await answerQuestion.mutateAsync({
-        sessionId: id,
-        questionId: DEMO_Q.address,
-        answer: demo.address.trim() || "—",
-      });
-      await answerQuestion.mutateAsync({
-        sessionId: id,
-        questionId: DEMO_Q.occupation,
-        answer: demo.occupation.trim() || "—",
-      });
+    // Move forward immediately
+    setCurrentQuestionId(1n);
+    setAnsweredIds([]);
+    setPhase("questions");
 
-      setCurrentQuestionId(1n);
-      setAnsweredIds([]);
-      setPhase("questions");
-    } catch (e) {
-      setRetryStatus(null);
-      const msg = e instanceof Error ? e.message : "";
-      if (
-        msg.includes("IC0508") ||
-        msg.includes("canister is stopped") ||
-        msg.includes("Canister is stopped")
-      ) {
-        setDemoError(
-          "Server temporarily unavailable. Please try again in a moment.",
-        );
-      } else {
-        setDemoError(e instanceof Error ? e.message : ui.errorMsg);
-      }
-    } finally {
-      setIsSubmitting(false);
+    // Background sync (fire and forget)
+    if (actor) {
+      syncSessionToCanister(session);
     }
   };
 
-  const submitAnswer = async (answer: string) => {
-    if (!sessionId || !currentQuestion) return;
-    setIsSubmitting(true);
-    setError("");
-    try {
-      await answerQuestion.mutateAsync({
-        sessionId,
-        questionId: currentQuestion.id,
-        answer,
-      });
+  /* ── Answer submit (LOCAL FIRST) ── */
+  const submitAnswer = useCallback(
+    (answer: string) => {
+      if (!currentQuestion) return;
+
+      // Save to localStorage FIRST — instant
+      const session = localSession.current;
+      if (session) {
+        const updated: LocalSession = {
+          ...session,
+          answers: { ...session.answers, [String(currentQuestion.id)]: answer },
+        };
+        localSession.current = updated;
+        saveLocalSession(updated);
+        // Background sync this answer
+        bgSyncAnswer(updated, currentQuestion.id, answer);
+      }
+
+      // Advance UI immediately
       setAnsweredIds((prev) => [...prev, currentQuestion.id]);
 
       let nextId: bigint | undefined;
@@ -445,19 +616,55 @@ export default function QuestionnairePage() {
         setCurrentQuestionId(nextId);
         setScaleValue(5);
       } else {
-        await completeSession.mutateAsync({ sessionId });
+        // Mark complete locally
+        const session2 = localSession.current;
+        if (session2) {
+          const completed: LocalSession = {
+            ...session2,
+            completed: true,
+            phase: "complete",
+          };
+          localSession.current = completed;
+          saveLocalSession(completed);
+
+          if (completed.syncedSessionId) {
+            setSyncStatus("syncing");
+            withCanisterRetry(
+              () =>
+                completeSession.mutateAsync({
+                  sessionId: BigInt(completed.syncedSessionId as string),
+                }),
+              10,
+            )
+              .then(() => {
+                setSyncStatus("synced");
+                setTimeout(() => setSyncStatus("idle"), 2000);
+              })
+              .catch(() => {
+                setSyncStatus("offline");
+                setTimeout(() => setSyncStatus("idle"), 3000);
+              });
+          }
+        }
         setPhase("complete");
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : ui.errorMsg);
-    } finally {
-      setIsSubmitting(false);
-    }
+    },
+    [currentQuestion, bgSyncAnswer, completeSession],
+  );
+
+  const handleScaleSubmit = () => {
+    submitAnswer(String(scaleValue));
   };
 
-  const handleScaleSubmit = async () => {
-    await submitAnswer(String(scaleValue));
-  };
+  // When actor becomes available and we have an unsynced local session, try syncing
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sync when actor ready
+  useEffect(() => {
+    if (!actor || !localSession.current) return;
+    const session = localSession.current;
+    if (!session.syncedSessionId) {
+      syncSessionToCanister(session);
+    }
+  }, [actor]);
 
   if (!doctorId) {
     return (
@@ -480,6 +687,9 @@ export default function QuestionnairePage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col relative overflow-x-hidden">
+      {/* Sync status bar */}
+      <SyncBar status={syncStatus} />
+
       {/* Ambient orbs */}
       <div
         className="fixed top-0 left-0 w-[600px] h-[600px] rounded-full pointer-events-none opacity-[0.06]"
@@ -498,16 +708,16 @@ export default function QuestionnairePage() {
         }}
       />
 
-      {/* ── Header ── */}
+      {/* Header */}
       <header className="relative border-b border-border/40 py-3 px-4 bg-card/60 backdrop-blur-md sticky top-0 z-20">
         <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <motion.div
               whileHover={{ scale: 1.05, rotate: 5 }}
-              className="w-9 h-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center shadow-glow-teal/30"
+              className="w-9 h-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center"
             >
-              <Stethoscope className="w-4.5 h-4.5 text-primary" />
+              <Stethoscope className="w-4 h-4 text-primary" />
             </motion.div>
             <div>
               <h1 className="font-display font-extrabold text-lg text-gradient-teal leading-none tracking-tight">
@@ -519,7 +729,6 @@ export default function QuestionnairePage() {
             </div>
           </div>
 
-          {/* Progress badge in header when in questions phase */}
           {phase === "questions" && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
@@ -546,6 +755,62 @@ export default function QuestionnairePage() {
         <div className="w-full max-w-2xl">
           <AnimatePresence mode="wait">
             {/* ══════════════════════════════
+                RESUME PROMPT
+            ══════════════════════════════ */}
+            {phase === "resume" && (
+              <motion.div
+                key="resume"
+                initial={{ opacity: 0, scale: 0.95, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: -16 }}
+                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+              >
+                <div className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden">
+                  <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
+                  <div className="p-8 sm:p-12 text-center">
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{
+                        type: "spring",
+                        stiffness: 220,
+                        damping: 14,
+                        delay: 0.1,
+                      }}
+                      className="w-20 h-20 rounded-2xl bg-primary/10 border border-primary/25 flex items-center justify-center mx-auto mb-6"
+                    >
+                      <CheckCircle2 className="w-10 h-10 text-primary" />
+                    </motion.div>
+                    <h2 className="font-display text-2xl font-extrabold text-gradient-teal mb-2">
+                      {ui.resumeTitle}
+                    </h2>
+                    <p className="text-muted-foreground mb-8 max-w-sm mx-auto">
+                      {ui.resumeMsg}
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                      <Button
+                        onClick={handleResume}
+                        data-ocid="questionnaire.resume_button"
+                        className="h-12 px-8 rounded-xl btn-gradient font-bold text-primary-foreground"
+                      >
+                        {ui.resumeBtn}
+                        <ArrowRight className="w-4 h-4 ml-2" />
+                      </Button>
+                      <Button
+                        onClick={handleRestartFresh}
+                        data-ocid="questionnaire.restart_button"
+                        variant="outline"
+                        className="h-12 px-8 rounded-xl font-semibold"
+                      >
+                        {ui.restartBtn}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ══════════════════════════════
                 LANGUAGE SELECTION
             ══════════════════════════════ */}
             {phase === "language" && (
@@ -556,7 +821,6 @@ export default function QuestionnairePage() {
                 exit={{ opacity: 0, y: -24 }}
                 transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               >
-                {/* Hero intro */}
                 <motion.div
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -677,7 +941,6 @@ export default function QuestionnairePage() {
                 exit={{ opacity: 0, x: -40 }}
                 transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               >
-                {/* Step indicator */}
                 <motion.div
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -708,7 +971,6 @@ export default function QuestionnairePage() {
                 >
                   <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
 
-                  {/* Card header */}
                   <div className="px-6 sm:px-8 pt-6 pb-5 border-b border-border/30 bg-primary/[0.03]">
                     <div className="flex items-center gap-3">
                       <div className="w-11 h-11 rounded-xl bg-primary/12 border border-primary/25 flex items-center justify-center">
@@ -727,7 +989,6 @@ export default function QuestionnairePage() {
 
                   <div className="p-6 sm:p-8">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                      {/* Full Name */}
                       <div className="space-y-2 sm:col-span-2">
                         <Label
                           htmlFor="pt-name"
@@ -748,7 +1009,6 @@ export default function QuestionnairePage() {
                         />
                       </div>
 
-                      {/* Age */}
                       <div className="space-y-2">
                         <Label
                           htmlFor="pt-age"
@@ -772,7 +1032,6 @@ export default function QuestionnairePage() {
                         />
                       </div>
 
-                      {/* Gender */}
                       <div className="space-y-2">
                         <Label className="text-sm font-semibold text-foreground/90">
                           {ui.genderLabel}
@@ -788,7 +1047,7 @@ export default function QuestionnairePage() {
                               }
                               className={`h-12 rounded-xl border-2 text-sm font-semibold transition-all duration-150 ${
                                 demo.gender === g
-                                  ? "border-primary bg-primary/12 text-primary shadow-glow-teal/20"
+                                  ? "border-primary bg-primary/12 text-primary"
                                   : "border-border/40 hover:border-primary/40 text-muted-foreground hover:text-foreground hover:bg-muted/30"
                               }`}
                             >
@@ -802,7 +1061,6 @@ export default function QuestionnairePage() {
                         </div>
                       </div>
 
-                      {/* Address */}
                       <div className="space-y-2">
                         <Label
                           htmlFor="pt-addr"
@@ -825,7 +1083,6 @@ export default function QuestionnairePage() {
                         />
                       </div>
 
-                      {/* Occupation */}
                       <div className="space-y-2">
                         <Label
                           htmlFor="pt-occ"
@@ -860,7 +1117,7 @@ export default function QuestionnairePage() {
                           }}
                           exit={{ opacity: 0, height: 0, marginTop: 0 }}
                           className="flex items-start gap-2.5 bg-destructive/8 border border-destructive/25 rounded-xl px-4 py-3"
-                          data-ocid="questionnaire.error_state"
+                          data-ocid="questionnaire.form.error_state"
                         >
                           <AlertCircle className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
                           <p className="text-sm text-destructive">
@@ -870,46 +1127,13 @@ export default function QuestionnairePage() {
                       )}
                     </AnimatePresence>
 
-                    <AnimatePresence>
-                      {retryStatus && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="flex items-center gap-3 bg-primary/8 border border-primary/25 rounded-xl px-4 py-3 mt-4"
-                          data-ocid="questionnaire.loading_state"
-                        >
-                          <Loader2 className="w-4 h-4 text-primary animate-spin flex-shrink-0" />
-                          <div>
-                            <p className="text-sm text-primary font-medium">
-                              Connecting to server, please wait...
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              Attempt {retryStatus.attempt} of{" "}
-                              {retryStatus.total}
-                            </p>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
                     <Button
                       onClick={handleDemoSubmit}
-                      disabled={isSubmitting}
                       className="w-full h-14 rounded-2xl btn-gradient font-bold text-base gap-2.5 mt-6 text-primary-foreground"
                       data-ocid="questionnaire.submit_button"
                     >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="w-5 h-5 animate-spin" />{" "}
-                          {retryStatus ? "Connecting..." : ui.loading}
-                        </>
-                      ) : (
-                        <>
-                          {ui.demoBtn}
-                          <ArrowRight className="w-5 h-5" />
-                        </>
-                      )}
+                      {ui.demoBtn}
+                      <ArrowRight className="w-5 h-5" />
                     </Button>
                   </div>
                 </div>
@@ -927,19 +1151,17 @@ export default function QuestionnairePage() {
                 exit={{ opacity: 0, x: -40 }}
                 transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
               >
-                {/* ── Enhanced Progress ── */}
+                {/* Progress */}
                 <div className="mb-6">
                   <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 rounded-full px-3 py-1">
-                        <span className="text-xs font-bold text-primary">
-                          {ui.progress} {questionNum}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          / {QUESTIONS.length}
-                        </span>
+                    <span className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/25 rounded-full px-3 py-1">
+                      <span className="text-xs font-bold text-primary">
+                        {ui.progress} {questionNum}
                       </span>
-                    </div>
+                      <span className="text-xs text-muted-foreground">
+                        / {QUESTIONS.length}
+                      </span>
+                    </span>
                     <div className="flex items-center gap-2">
                       <span
                         className="text-xs font-semibold tabular-nums"
@@ -954,8 +1176,6 @@ export default function QuestionnairePage() {
                       </span>
                     </div>
                   </div>
-
-                  {/* Segmented progress bar */}
                   <div className="flex gap-1">
                     {QUESTIONS.slice(0, Math.min(QUESTIONS.length, 20)).map(
                       (q, idx) => (
@@ -979,15 +1199,13 @@ export default function QuestionnairePage() {
                   </div>
                 </div>
 
-                {/* ── Question Card ── */}
+                {/* Question Card */}
                 <div
                   className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-md shadow-elevated overflow-hidden"
                   data-ocid="questionnaire.question_card"
                 >
                   <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
-
                   <div className="p-6 sm:p-8">
-                    {/* Question number badge + text */}
                     <div className="flex items-start gap-3 mb-6">
                       <div
                         className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-sm font-extrabold font-display border"
@@ -1004,32 +1222,16 @@ export default function QuestionnairePage() {
                       </h2>
                     </div>
 
-                    <AnimatePresence>
-                      {error && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="flex items-center gap-2 bg-destructive/8 border border-destructive/25 rounded-xl px-4 py-3 mb-4"
-                          data-ocid="questionnaire.error_state"
-                        >
-                          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
-                          <p className="text-sm text-destructive">{error}</p>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {/* ── Yes / No ── */}
+                    {/* Yes / No */}
                     {currentQuestion.type === "yesno" && (
                       <div className="grid grid-cols-2 gap-4">
                         <motion.button
                           type="button"
                           data-ocid="questionnaire.yes_button"
                           onClick={() => submitAnswer("yes")}
-                          disabled={isSubmitting}
                           whileHover={{ scale: 1.03, y: -2 }}
                           whileTap={{ scale: 0.97 }}
-                          className="h-20 rounded-2xl font-extrabold text-xl transition-all duration-200 disabled:opacity-50 flex flex-col items-center justify-center gap-1"
+                          className="h-20 rounded-2xl font-extrabold text-xl transition-all duration-200 flex flex-col items-center justify-center gap-1"
                           style={{
                             background:
                               "linear-gradient(135deg, oklch(0.74 0.17 178), oklch(0.68 0.18 196))",
@@ -1038,31 +1240,24 @@ export default function QuestionnairePage() {
                               "0 6px 24px oklch(0.74 0.17 178 / 0.35), 0 2px 8px oklch(0 0 0 / 0.2)",
                           }}
                         >
-                          {isSubmitting ? (
-                            <Loader2 className="w-6 h-6 animate-spin" />
-                          ) : (
-                            <>
-                              <CheckCircle2 className="w-6 h-6" />
-                              <span>{ui.yes}</span>
-                            </>
-                          )}
+                          <CheckCircle2 className="w-6 h-6" />
+                          <span>{ui.yes}</span>
                         </motion.button>
 
                         <motion.button
                           type="button"
                           data-ocid="questionnaire.no_button"
                           onClick={() => submitAnswer("no")}
-                          disabled={isSubmitting}
                           whileHover={{ scale: 1.03, y: -2 }}
                           whileTap={{ scale: 0.97 }}
-                          className="h-20 rounded-2xl border-2 border-border/60 bg-muted/30 hover:bg-muted/50 hover:border-border font-extrabold text-xl transition-all duration-200 disabled:opacity-50 flex flex-col items-center justify-center gap-1 text-foreground/80"
+                          className="h-20 rounded-2xl border-2 border-border/60 bg-muted/30 hover:bg-muted/50 hover:border-border font-extrabold text-xl transition-all duration-200 flex flex-col items-center justify-center gap-1 text-foreground/80"
                         >
                           {ui.no}
                         </motion.button>
                       </div>
                     )}
 
-                    {/* ── Choice ── */}
+                    {/* Choice */}
                     {currentQuestion.type === "choice" &&
                       currentQuestion.options && (
                         <motion.div
@@ -1079,26 +1274,19 @@ export default function QuestionnairePage() {
                               key={opt.value}
                               data-ocid={`questionnaire.choice.item.${idx + 1}`}
                               onClick={() => submitAnswer(opt.value)}
-                              disabled={isSubmitting}
                               variants={{
                                 hidden: { opacity: 0, x: 12 },
                                 visible: { opacity: 1, x: 0 },
                               }}
                               whileHover={{ x: 4 }}
                               whileTap={{ scale: 0.99 }}
-                              className="w-full text-left px-5 py-4 rounded-2xl border-2 border-border/40 bg-muted/15 hover:border-primary/60 hover:bg-primary/5 font-medium text-base transition-all duration-150 disabled:opacity-50 group"
+                              className="w-full text-left px-5 py-4 rounded-2xl border-2 border-border/40 bg-muted/15 hover:border-primary/60 hover:bg-primary/5 font-medium text-base transition-all duration-150 group"
                             >
                               <span className="flex items-center gap-4">
                                 <span className="w-8 h-8 rounded-xl border-2 border-border/60 group-hover:border-primary/70 flex items-center justify-center text-sm font-extrabold text-muted-foreground group-hover:text-primary group-hover:bg-primary/8 transition-all flex-shrink-0 font-display">
                                   {String.fromCharCode(65 + idx)}
                                 </span>
-                                <span className="flex-1">
-                                  {isSubmitting ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    opt[language]
-                                  )}
-                                </span>
+                                <span className="flex-1">{opt[language]}</span>
                                 <ChevronRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-primary/60 transition-colors flex-shrink-0" />
                               </span>
                             </motion.button>
@@ -1106,10 +1294,9 @@ export default function QuestionnairePage() {
                         </motion.div>
                       )}
 
-                    {/* ── Scale ── */}
+                    {/* Scale */}
                     {currentQuestion.type === "scale" && (
                       <div className="space-y-6">
-                        {/* Value display */}
                         <div className="flex flex-col items-center gap-2 py-4">
                           <motion.div
                             key={scaleValue}
@@ -1162,17 +1349,10 @@ export default function QuestionnairePage() {
                         <Button
                           data-ocid="questionnaire.next_button"
                           onClick={handleScaleSubmit}
-                          disabled={isSubmitting}
                           className="w-full h-14 rounded-2xl btn-gradient font-bold text-base gap-2.5 text-primary-foreground"
                         >
-                          {isSubmitting ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                          ) : (
-                            <>
-                              {ui.next}
-                              <ArrowRight className="w-5 h-5" />
-                            </>
-                          )}
+                          {ui.next}
+                          <ArrowRight className="w-5 h-5" />
                         </Button>
                       </div>
                     )}
@@ -1195,27 +1375,23 @@ export default function QuestionnairePage() {
                   className="relative rounded-2xl border border-primary/30 bg-card/80 backdrop-blur-md shadow-elevated text-center overflow-hidden"
                   data-ocid="questionnaire.complete_card"
                 >
-                  {/* top accent */}
                   <div className="h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent" />
 
-                  {/* particles */}
                   <div className="absolute inset-0 pointer-events-none overflow-hidden">
                     {particles.current.map((p) => (
                       <Particle key={p.id} delay={p.delay} x={p.x} y={p.y} />
                     ))}
                   </div>
 
-                  {/* bottom glow */}
                   <div
                     className="absolute bottom-0 left-0 right-0 h-40 pointer-events-none"
                     style={{
                       background:
-                        "radial-gradient(ellipse 60% 100% at 50% 100%, oklch(0.74 0.17 178 / 0.12) 0%, transparent 70%)",
+                        "radial-gradient(ellipse at 50% 100%, oklch(0.74 0.17 178 / 0.15) 0%, transparent 70%)",
                     }}
                   />
 
                   <div className="relative z-10 p-10 sm:p-14">
-                    {/* Animated icon */}
                     <motion.div
                       initial={{ scale: 0, rotate: -30 }}
                       animate={{ scale: 1, rotate: 0 }}
@@ -1227,7 +1403,6 @@ export default function QuestionnairePage() {
                       }}
                       className="relative mx-auto mb-8 w-28 h-28"
                     >
-                      {/* Pulsing ring */}
                       <motion.div
                         animate={{
                           scale: [1, 1.25, 1],

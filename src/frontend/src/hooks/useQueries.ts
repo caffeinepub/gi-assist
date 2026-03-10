@@ -74,13 +74,19 @@ export function useRegisterDoctor() {
       name,
       clinic,
       email,
+      onRetry,
     }: {
       name: string;
       clinic: string;
       email: string;
+      onRetry?: (attempt: number, total: number) => void;
     }) => {
       if (!actor) throw new Error("Not connected");
-      await withCanisterRetry(() => actor.registerDoctor(name, clinic, email));
+      await withCanisterRetry(
+        () => actor.registerDoctor(name, clinic, email),
+        8,
+        onRetry,
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["doctor"] });
@@ -104,7 +110,7 @@ export function useCreatePatientSession() {
       if (!actor) throw new Error("Not connected");
       return await withCanisterRetry(
         () => actor.createPatientSession(doctorId, language),
-        5,
+        8,
         onRetry,
       );
     },
@@ -119,14 +125,18 @@ export function useAnswerQuestion() {
       sessionId,
       questionId,
       answer,
+      onRetry,
     }: {
       sessionId: bigint;
       questionId: bigint;
       answer: string;
+      onRetry?: (attempt: number, total: number) => void;
     }) => {
       if (!actor) throw new Error("Not connected");
-      await withCanisterRetry(() =>
-        actor.answerQuestion(sessionId, questionId, answer),
+      await withCanisterRetry(
+        () => actor.answerQuestion(sessionId, questionId, answer),
+        8,
+        onRetry,
       );
     },
   });
@@ -136,9 +146,19 @@ export function useCompleteSession() {
   const { actor } = useActor();
 
   return useMutation({
-    mutationFn: async ({ sessionId }: { sessionId: bigint }) => {
+    mutationFn: async ({
+      sessionId,
+      onRetry,
+    }: {
+      sessionId: bigint;
+      onRetry?: (attempt: number, total: number) => void;
+    }) => {
       if (!actor) throw new Error("Not connected");
-      await withCanisterRetry(() => actor.completeSession(sessionId));
+      await withCanisterRetry(
+        () => actor.completeSession(sessionId),
+        8,
+        onRetry,
+      );
     },
   });
 }
