@@ -10,20 +10,35 @@ import {
   ChevronRight,
   Clock,
   Copy,
+  FlaskConical,
   Link2,
+  Loader2,
   LogOut,
   MapPin,
+  RefreshCw,
   Search,
   Stethoscope,
   TrendingUp,
   Users,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { PatientSession } from "../backend.d";
+import { analyzeSession } from "../clinicalEngine";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
-import { useGetDoctor, useGetSessionsByDoctor } from "../hooks/useQueries";
+import {
+  useAnswerQuestion,
+  useCompleteSession,
+  useCreatePatientSession,
+  useGetDoctor,
+  useGetSessionsByDoctor,
+} from "../hooks/useQueries";
+import {
+  type LocalSession,
+  clearLocalSession,
+  loadLocalSession,
+} from "../utils/localSession";
 import { DEMO_Q } from "./Questionnaire";
 
 const LANG_LABEL: Record<string, string> = {
@@ -163,6 +178,24 @@ function StatsBar({
   );
 }
 
+function ConfidenceBadge({
+  confidence,
+}: { confidence: "High" | "Moderate" | "Low" }) {
+  const cls =
+    confidence === "High"
+      ? "text-destructive bg-destructive/10 border-destructive/20"
+      : confidence === "Moderate"
+        ? "text-warning bg-warning/10 border-warning/20"
+        : "text-muted-foreground bg-muted/20 border-border/30";
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border ${cls} leading-none`}
+    >
+      {confidence}
+    </span>
+  );
+}
+
 function SessionRow({
   session,
   index,
@@ -187,6 +220,16 @@ function SessionRow({
         .toUpperCase()
     : `#${String(session.id)}`;
 
+  // Clinical summary — only for completed sessions
+  const clinicalSummary =
+    isComplete && session.answers.length > 0
+      ? analyzeSession(session.answers)
+      : null;
+  const topDiff = clinicalSummary?.differentials[0] ?? null;
+  const topInvestigations =
+    clinicalSummary?.suggestedInvestigations.slice(0, 3) ?? [];
+  const extraCount = (clinicalSummary?.suggestedInvestigations.length ?? 0) - 3;
+
   const handleViewReport = () => {
     if (!isComplete) return;
     navigate({ to: "/report", search: { sessionId: String(session.id) } });
@@ -204,7 +247,7 @@ function SessionRow({
       }}
       data-ocid={ocid}
       onClick={handleViewReport}
-      className={`relative group min-h-[72px] rounded-xl border transition-all duration-200 overflow-hidden ${
+      className={`relative group rounded-xl border transition-all duration-200 overflow-hidden ${
         isComplete
           ? "border-border/40 hover:border-primary/40 hover:shadow-glow-teal cursor-pointer bg-card/60 hover:bg-card/80 border-l-2 border-l-primary/30"
           : "border-border/30 cursor-default bg-card/40 border-l-2 border-l-warning/30"
@@ -213,10 +256,10 @@ function SessionRow({
       {/* Scan shimmer on hover */}
       <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
-      <div className="pl-5 pr-4 py-4 flex items-center gap-4">
+      <div className="pl-5 pr-4 py-4 flex items-start gap-4">
         {/* Avatar */}
         <div
-          className={`w-11 h-11 rounded-xl flex items-center justify-center font-display font-bold text-sm flex-shrink-0 ${
+          className={`w-11 h-11 rounded-xl flex items-center justify-center font-display font-bold text-sm flex-shrink-0 mt-0.5 ${
             isComplete
               ? "bg-primary/12 text-primary border border-primary/20"
               : "bg-warning/10 text-warning border border-warning/20"
@@ -227,6 +270,7 @@ function SessionRow({
 
         {/* Details */}
         <div className="flex-1 min-w-0">
+          {/* Demographics */}
           {hasDemo ? (
             <>
               <p className="font-semibold text-sm truncate">{ptName}</p>
@@ -250,10 +294,48 @@ function SessionRow({
             {LANG_LABEL[session.language] ?? session.language} &middot;{" "}
             {formatDate(session.completedAt)}
           </p>
+
+          {/* Clinical summary — completed sessions only */}
+          {isComplete && (topDiff || topInvestigations.length > 0) && (
+            <div className="mt-2.5 pt-2.5 border-t border-border/20 space-y-1.5">
+              {/* Top differential */}
+              {topDiff && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Stethoscope className="w-3 h-3 text-primary/50 flex-shrink-0" />
+                  <span className="text-xs text-muted-foreground/70 font-medium truncate max-w-[220px]">
+                    {topDiff.condition}
+                  </span>
+                  <ConfidenceBadge confidence={topDiff.confidence} />
+                </div>
+              )}
+
+              {/* Top investigations */}
+              {topInvestigations.length > 0 && (
+                <div className="flex items-start gap-1.5 flex-wrap">
+                  <FlaskConical className="w-3 h-3 text-primary/40 flex-shrink-0 mt-0.5" />
+                  <div className="flex flex-wrap gap-1">
+                    {topInvestigations.map((inv) => (
+                      <span
+                        key={inv}
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] bg-primary/5 border border-primary/12 text-muted-foreground/80 leading-none"
+                      >
+                        {inv}
+                      </span>
+                    ))}
+                    {extraCount > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] bg-muted/20 border border-border/30 text-muted-foreground/60 leading-none">
+                        +{extraCount} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Status pill — prominent, on the right */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
           <span
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
               isComplete
@@ -285,6 +367,69 @@ export default function DashboardPage() {
   const { data: sessions, isLoading: isSessionsLoading } =
     useGetSessionsByDoctor();
   const [searchQuery, setSearchQuery] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingLocalSession, setPendingLocalSession] =
+    useState<LocalSession | null>(null);
+
+  const createSession = useCreatePatientSession();
+  const answerQuestion = useAnswerQuestion();
+  const completeSession = useCompleteSession();
+  const { refetch: refetchSessions } = useGetSessionsByDoctor();
+
+  // Check localStorage for pending (unsynced) sessions on mount + after sync
+  const checkPending = useCallback(() => {
+    if (!identity) return;
+    const doctorId = identity.getPrincipal().toString();
+    const session = loadLocalSession(doctorId);
+    if (session?.completed && !session.syncedSessionId) {
+      setPendingLocalSession(session!);
+    } else {
+      setPendingLocalSession(null);
+    }
+  }, [identity]);
+
+  useEffect(() => {
+    checkPending();
+  }, [checkPending]);
+
+  const handleSyncPending = async () => {
+    if (!identity || !pendingLocalSession) return;
+    setIsSyncing(true);
+    try {
+      const doctorId = identity.getPrincipal().toString();
+      // Create session on canister
+      const sessionId = await createSession.mutateAsync({
+        doctorId: identity.getPrincipal() as any,
+        language: pendingLocalSession.language,
+      });
+      const sidStr = sessionId.toString();
+      // Push all answers
+      for (const [qIdStr, answer] of Object.entries(
+        pendingLocalSession.answers,
+      )) {
+        await answerQuestion.mutateAsync({
+          sessionId: BigInt(sidStr),
+          questionId: BigInt(qIdStr),
+          answer,
+        });
+      }
+      // Complete the session
+      await completeSession.mutateAsync({ sessionId: BigInt(sidStr) });
+      // Clear from localStorage
+      clearLocalSession(doctorId);
+      setPendingLocalSession(null);
+      await refetchSessions();
+      toast.success("Session synced to dashboard!", {
+        description: "Patient data is now available in your session list.",
+      });
+    } catch {
+      toast.error("Sync failed — try again", {
+        description: "The server may be temporarily unavailable. Please retry.",
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   useEffect(() => {
     if ((isLoginIdle || isLoginSuccess) && !identity) {
@@ -357,16 +502,48 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-          <Button
-            data-ocid="dashboard.logout_button"
-            variant="ghost"
-            size="sm"
-            onClick={handleLogout}
-            className="text-muted-foreground hover:text-foreground hover:bg-muted/50 gap-2 rounded-xl"
-          >
-            <LogOut className="w-4 h-4" />
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            {pendingLocalSession && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+              >
+                <Button
+                  data-ocid="dashboard.sync_button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSyncPending}
+                  disabled={isSyncing}
+                  className="relative gap-2 rounded-xl border-primary/40 text-primary hover:bg-primary/10 hover:border-primary/60"
+                >
+                  {isSyncing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {isSyncing ? "Syncing…" : "Sync Pending"}
+                  </span>
+                  {!isSyncing && (
+                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-amber-500 text-[9px] font-bold text-black flex items-center justify-center leading-none">
+                      1
+                    </span>
+                  )}
+                </Button>
+              </motion.div>
+            )}
+            <Button
+              data-ocid="dashboard.logout_button"
+              variant="ghost"
+              size="sm"
+              onClick={handleLogout}
+              className="text-muted-foreground hover:text-foreground hover:bg-muted/50 gap-2 rounded-xl"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Logout</span>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -463,7 +640,7 @@ export default function DashboardPage() {
                     Patient Sessions
                   </CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Click a completed session to view the clinical report
+                    Click a completed session to view the full clinical report
                   </p>
                 </div>
               </div>

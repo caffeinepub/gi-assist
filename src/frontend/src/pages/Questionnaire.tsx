@@ -9,8 +9,10 @@ import {
   ArrowRight,
   CheckCircle2,
   ChevronRight,
+  CloudUpload,
   Globe,
   Loader2,
+  RefreshCw,
   Stethoscope,
   User,
 } from "lucide-react";
@@ -1464,6 +1466,51 @@ export default function QuestionnairePage() {
                       <span className="text-sm font-medium text-primary/80">
                         GI-CDSS · Clinical Decision Support
                       </span>
+                    </motion.div>
+
+                    {/* Manual Sync Button */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.8 }}
+                      className="mt-6 flex flex-col items-center gap-3"
+                    >
+                      {syncStatus !== "synced" ? (
+                        <Button
+                          data-ocid="questionnaire.sync_button"
+                          onClick={() => {
+                            if (localSession.current)
+                              syncSessionToCanister(localSession.current);
+                          }}
+                          disabled={syncStatus === "syncing"}
+                          className="relative gap-2 px-8 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-primary to-primary/80 text-primary-foreground shadow-lg hover:shadow-primary/40 hover:scale-[1.03] active:scale-[0.98] transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {syncStatus === "syncing" ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              Sending to Dashboard...
+                            </>
+                          ) : (
+                            <>
+                              <CloudUpload className="w-4 h-4" />
+                              Send to Dashboard
+                            </>
+                          )}
+                        </Button>
+                      ) : (
+                        <div className="inline-flex items-center gap-2 bg-green-500/10 border border-green-500/30 rounded-xl px-6 py-3">
+                          <CheckCircle2 className="w-4 h-4 text-green-400" />
+                          <span className="text-sm font-semibold text-green-400">
+                            Synced to Dashboard
+                          </span>
+                        </div>
+                      )}
+                      {syncStatus === "offline" && (
+                        <p className="text-xs text-amber-400/70 max-w-xs text-center">
+                          Could not reach the server. Your data is saved locally
+                          — tap above to retry.
+                        </p>
+                      )}
                     </motion.div>
                   </div>
                 </div>

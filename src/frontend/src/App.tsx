@@ -42,12 +42,18 @@ const dashboardRoute = createRoute({
 const questionnaireRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/questionnaire",
+  validateSearch: (search: Record<string, unknown>) => ({
+    doctorId: search.doctorId ? String(search.doctorId) : undefined,
+  }),
   component: QuestionnairePage,
 });
 
 const reportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/report",
+  validateSearch: (search: Record<string, unknown>) => ({
+    sessionId: search.sessionId ? String(search.sessionId) : undefined,
+  }),
   component: ClinicalReportPage,
 });
 
